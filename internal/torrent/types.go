@@ -15,5 +15,6 @@ type TorrentInfo struct {
 	Progress     float64    `json:"progress"`
 	DownloadRate int64      `json:"downloadRate"`
 	Peers        int        `json:"peers"`
+	Mode         string     `json:"mode,omitempty"`
 	Files        []FileInfo `json:"files,omitempty"`
 }

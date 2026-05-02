@@ -9,6 +9,7 @@ import (
 
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 	webroot "github.com/AntonZubritski/ZubraCinema/web"
 )
@@ -16,6 +17,7 @@ import (
 type Deps struct {
 	Manager    *ztorrent.Manager
 	Aggregator *sources.Aggregator
+	Rutor      *rutor.Source
 }
 
 func New(d Deps) http.Handler {
@@ -23,6 +25,11 @@ func New(d Deps) http.Handler {
 
 	// Search (grouped torrents pulled directly from trackers).
 	mux.HandleFunc("GET /api/search", handleSearch(d.Aggregator))
+
+	// Featured HD movies (rutor-only, cached).
+	if d.Rutor != nil {
+		mux.HandleFunc("GET /api/featured", handleFeatured(d.Rutor, d.Aggregator))
+	}
 
 	// Torrent CRUD
 	mux.HandleFunc("POST /api/torrents", handleAddTorrent(d.Manager))

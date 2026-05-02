@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { Group } from '../api';
+import { dominantLanguage } from '../lib/lang';
+import { LanguageBadge } from './LanguageBadge';
 
 type Props = {
   group: Group;
@@ -26,6 +28,7 @@ export function MovieCard({ group, onClick }: Props) {
   const showFallback = !hasCover || imgFailed;
   const initials = initialsOf(group.title);
   const torrentCount = group.torrents.length;
+  const lang = dominantLanguage(group.torrents);
 
   return (
     <button
@@ -80,6 +83,12 @@ export function MovieCard({ group, onClick }: Props) {
             style={{ borderRadius: 1 }}
           >
             {torrentCount}×
+          </div>
+        )}
+
+        {torrentCount > 0 && (
+          <div className="absolute top-3 left-3">
+            <LanguageBadge language={lang} variant="corner" />
           </div>
         )}
 

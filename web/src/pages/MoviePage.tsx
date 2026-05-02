@@ -1,13 +1,15 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ApiError,
   startTorrent,
   type Group,
   type GroupTorrent,
+  type TorrentMode,
 } from '../api';
 import { TorrentRow } from '../components/TorrentRow';
 import { useToast } from '../lib/toast';
+import { sortTorrentsByLanguagePriority } from '../lib/sortFilter';
 
 type LocationState = { group?: Group } | null;
 
@@ -30,15 +32,21 @@ export default function MoviePage() {
   const state = location.state as LocationState;
   const group = state?.group ?? null;
 
-  const [busyTorrentId, setBusyTorrentId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ id: string; mode: TorrentMode } | null>(null);
 
   const handlePick = useCallback(
-    async (torrent: GroupTorrent) => {
-      if (busyTorrentId) return;
-      setBusyTorrentId(torrent.id);
+    async (torrent: GroupTorrent, mode: TorrentMode) => {
+      if (busy) return;
+      setBusy({ id: torrent.id, mode });
       try {
-        const session = await startTorrent(torrent.magnet);
-        navigate(`/play/${encodeURIComponent(session.id)}`);
+        const session = await startTorrent(torrent.magnet, mode);
+        if (mode === 'stream') {
+          navigate(`/play/${encodeURIComponent(session.id)}`);
+          return;
+        }
+        const name = session.name || torrent.title;
+        showToast('info', `Loading ${name}… open downloads strip to track`);
+        setBusy(null);
       } catch (err) {
         const msg =
           err instanceof ApiError
@@ -47,10 +55,10 @@ export default function MoviePage() {
               ? err.message
               : 'Could not start torrent';
         showToast('error', msg);
-        setBusyTorrentId(null);
+        setBusy(null);
       }
     },
-    [busyTorrentId, navigate, showToast],
+    [busy, navigate, showToast],
   );
 
   return (
@@ -58,11 +66,7 @@ export default function MoviePage() {
       <div className="relative z-10 max-w-[1500px] mx-auto px-8 lg:px-14 pt-8 pb-24">
         <TopNav />
         {group ? (
-          <GroupView
-            group={group}
-            busyTorrentId={busyTorrentId}
-            onPick={handlePick}
-          />
+          <GroupView group={group} busy={busy} onPick={handlePick} />
         ) : (
           <MissingState />
         )}
@@ -73,14 +77,17 @@ export default function MoviePage() {
 
 function GroupView({
   group,
-  busyTorrentId,
+  busy,
   onPick,
 }: {
   group: Group;
-  busyTorrentId: string | null;
-  onPick: (t: GroupTorrent) => void;
+  busy: { id: string; mode: TorrentMode } | null;
+  onPick: (t: GroupTorrent, mode: TorrentMode) => void;
 }) {
-  const sortedTorrents = [...group.torrents].sort((a, b) => b.seeders - a.seeders);
+  const sortedTorrents = useMemo(
+    () => sortTorrentsByLanguagePriority(group.torrents),
+    [group.torrents],
+  );
 
   return (
     <div className="mt-10 md:mt-14 animate-fade-in">
@@ -126,8 +133,8 @@ function GroupView({
                   <TorrentRow
                     key={t.id}
                     torrent={t}
-                    busy={busyTorrentId === t.id}
-                    disabled={busyTorrentId !== null && busyTorrentId !== t.id}
+                    busy={busy && busy.id === t.id ? busy.mode : null}
+                    disabled={busy !== null && busy.id !== t.id}
                     onPick={onPick}
                   />
                 ))}

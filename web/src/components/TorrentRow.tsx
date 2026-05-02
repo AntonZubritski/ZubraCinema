@@ -1,12 +1,14 @@
-import type { GroupTorrent } from '../api';
+import type { GroupTorrent, TorrentMode } from '../api';
 import { formatBytes } from '../lib/format';
+import { normalizeLanguage } from '../lib/lang';
+import { LanguageBadge } from './LanguageBadge';
 import { Spinner } from './Spinner';
 
 type Props = {
   torrent: GroupTorrent;
-  busy: boolean;
+  busy: TorrentMode | null;
   disabled: boolean;
-  onPick: (torrent: GroupTorrent) => void;
+  onPick: (torrent: GroupTorrent, mode: TorrentMode) => void;
 };
 
 export function TorrentRow({ torrent, busy, disabled, onPick }: Props) {
@@ -17,20 +19,18 @@ export function TorrentRow({ torrent, busy, disabled, onPick }: Props) {
         ? 'text-bone-50'
         : 'text-bone-300/50';
 
+  const lang = normalizeLanguage(torrent.language);
+
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => onPick(torrent)}
+    <div
       className="
-        focus-ring group
-        w-full flex items-center gap-4 md:gap-6
+        group
+        w-full flex items-center gap-3 md:gap-5
         px-4 md:px-5 py-3 md:py-4
         bg-ink-900/60
         border border-ink-700/60
         hover:border-ember-300/40 hover:bg-ink-850
-        disabled:opacity-50 disabled:cursor-not-allowed
-        transition-all
+        transition-colors
         text-left
       "
       style={{ borderRadius: 2 }}
@@ -41,21 +41,23 @@ export function TorrentRow({ torrent, busy, disabled, onPick }: Props) {
         <span className="text-bone-300/40">{torrent.leechers}</span>
       </div>
 
-      {torrent.quality && (
-        <span
-          className="
-            flex-shrink-0
-            hidden sm:inline-block
-            px-2 py-0.5
-            text-[10px] uppercase tracking-[0.18em] font-semibold
-            text-ember-200 border border-ember-300/30
-            bg-ember-400/[0.04]
-          "
-          style={{ borderRadius: 1 }}
-        >
-          {torrent.quality}
-        </span>
-      )}
+      <div className="flex-shrink-0 flex items-center gap-1.5">
+        {torrent.quality && (
+          <span
+            className="
+              hidden sm:inline-block
+              px-2 py-0.5
+              text-[10px] uppercase tracking-[0.18em] font-semibold
+              text-ember-200 border border-ember-300/30
+              bg-ember-400/[0.04]
+            "
+            style={{ borderRadius: 1 }}
+          >
+            {torrent.quality}
+          </span>
+        )}
+        <LanguageBadge language={lang} variant="inline" />
+      </div>
 
       <div className="flex-shrink-0 w-20 text-xs text-bone-300/70 tabular-nums">
         {formatBytes(torrent.size)}
@@ -78,30 +80,61 @@ export function TorrentRow({ torrent, busy, disabled, onPick }: Props) {
         {torrent.title}
       </div>
 
-      <div
-        className="
-          flex-shrink-0 flex items-center gap-2
-          px-3 md:px-4 py-1.5
-          text-[11px] uppercase tracking-[0.2em] font-medium
-          text-bone-50
-          bg-ember-400 group-hover:bg-ember-300
-          group-disabled:bg-ink-700 group-disabled:text-bone-300/40
-          transition-colors
-        "
-        style={{ borderRadius: 1 }}
-      >
-        {busy ? (
-          <>
-            <Spinner size={12} />
-            <span>Loading</span>
-          </>
-        ) : (
-          <>
-            <PlayIcon />
-            <span>Watch</span>
-          </>
-        )}
+      <div className="flex-shrink-0 flex items-center gap-1.5">
+        <ActionButton
+          variant="primary"
+          busy={busy === 'stream'}
+          disabled={disabled}
+          onClick={() => onPick(torrent, 'stream')}
+          icon={<PlayIcon />}
+          label="Watch"
+        />
+        <ActionButton
+          variant="outline"
+          busy={busy === 'download'}
+          disabled={disabled}
+          onClick={() => onPick(torrent, 'download')}
+          icon={<DownloadIcon />}
+          label="Download"
+        />
       </div>
+    </div>
+  );
+}
+
+function ActionButton({
+  variant,
+  busy,
+  disabled,
+  onClick,
+  icon,
+  label,
+}: {
+  variant: 'primary' | 'outline';
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  const base =
+    'focus-ring flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 text-[11px] uppercase tracking-[0.2em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+  const skin =
+    variant === 'primary'
+      ? 'text-bone-50 bg-ember-400 hover:bg-ember-300'
+      : 'text-ember-200 border border-ember-300/40 hover:bg-ember-400/[0.08] hover:border-ember-300/70';
+
+  return (
+    <button
+      type="button"
+      disabled={disabled || busy}
+      onClick={onClick}
+      className={`${base} ${skin}`}
+      style={{ borderRadius: 1 }}
+      aria-label={label}
+    >
+      {busy ? <Spinner size={12} /> : icon}
+      <span className="hidden sm:inline">{busy ? '…' : label}</span>
     </button>
   );
 }
@@ -110,6 +143,26 @@ function PlayIcon() {
   return (
     <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M6 4l14 8-14 8z" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v12" />
+      <path d="m6 11 6 6 6-6" />
+      <path d="M5 21h14" />
     </svg>
   );
 }

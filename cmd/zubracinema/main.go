@@ -68,7 +68,8 @@ func main() {
 		}
 	}()
 
-	agg := sources.NewAggregator(rutor.New(), onethreethreesevenx.New())
+	rutorSrc := rutor.New()
+	agg := sources.NewAggregator(rutorSrc, onethreethreesevenx.New())
 
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
 	srv := &http.Server{
@@ -76,6 +77,7 @@ func main() {
 		Handler: server.New(server.Deps{
 			Manager:    mgr,
 			Aggregator: agg,
+			Rutor:      rutorSrc,
 		}),
 	}
 

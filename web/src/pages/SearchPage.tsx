@@ -1,70 +1,86 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError, searchGroups, type Group } from '../api';
+import { ApiError, fetchFeatured, searchGroups, type Group } from '../api';
 import { SearchBar } from '../components/SearchBar';
 import { MovieGrid, MovieGridSkeleton } from '../components/MovieGrid';
+import { SortBar } from '../components/SortBar';
+import type { Language } from '../lib/lang';
+import { filterGroups, sortGroups, type QualityBucket, type SortKey } from '../lib/sortFilter';
+import { DEFAULT_STATE, parseState, serializeState } from '../lib/url';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialQ = searchParams.get('q') ?? '';
-  const [query, setQuery] = useState(initialQ);
+  const initial = useMemo(() => parseState(searchParams), [searchParams]);
+
+  const [query, setQuery] = useState(initial.q);
+  const [committedQuery, setCommittedQuery] = useState(initial.q);
+  const [sort, setSort] = useState<SortKey>(initial.sort);
+  const [langs, setLangs] = useState<Language[]>(initial.langs);
+  const [qualities, setQualities] = useState<QualityBucket[]>(initial.qualities);
+
   const [status, setStatus] = useState<Status>('idle');
   const [groups, setGroups] = useState<Group[]>([]);
   const [errorText, setErrorText] = useState<string>('');
+  const [mode, setMode] = useState<'featured' | 'search'>(
+    initial.q.trim().length > 0 ? 'search' : 'featured',
+  );
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
 
-  const runSearch = useCallback(
-    async (q: string) => {
-      const trimmed = q.trim();
-      if (!trimmed) return;
+  const runSearch = useCallback(async (q: string) => {
+    const trimmed = q.trim();
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
 
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
+    setStatus('loading');
+    setErrorText('');
+    setCommittedQuery(trimmed);
 
-      setStatus('loading');
-      setErrorText('');
-
-      try {
-        const results = await searchGroups(trimmed, ac.signal);
-        if (ac.signal.aborted) return;
-        setGroups(results);
-        setStatus('success');
-      } catch (err) {
-        if (ac.signal.aborted) return;
-        if (err instanceof Error && err.name === 'AbortError') return;
-        if (err instanceof ApiError) {
-          setErrorText(err.message);
-        } else if (err instanceof Error) {
-          setErrorText(err.message);
-        } else {
-          setErrorText('Something went wrong');
-        }
-        setStatus('error');
+    try {
+      const results =
+        trimmed.length === 0
+          ? await fetchFeatured(ac.signal)
+          : await searchGroups(trimmed, ac.signal);
+      if (ac.signal.aborted) return;
+      setGroups(results);
+      setMode(trimmed.length === 0 ? 'featured' : 'search');
+      setStatus('success');
+    } catch (err) {
+      if (ac.signal.aborted) return;
+      if (err instanceof Error && err.name === 'AbortError') return;
+      if (err instanceof ApiError) {
+        setErrorText(err.message);
+      } else if (err instanceof Error) {
+        setErrorText(err.message);
+      } else {
+        setErrorText('Something went wrong');
       }
-    },
-    [],
-  );
+      setStatus('error');
+    }
+  }, []);
 
   useEffect(() => {
-    if (initialQ.trim().length > 0) {
-      void runSearch(initialQ);
-    }
+    void runSearch(initial.q);
     return () => {
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const next = serializeState({ q: committedQuery, sort, langs, qualities });
+    const current = searchParams.toString();
+    if (next.toString() !== current) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [committedQuery, sort, langs, qualities, searchParams, setSearchParams]);
+
   const handleSubmit = useCallback(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setSearchParams(trimmed ? { q: trimmed } : {}, { replace: false });
-    void runSearch(trimmed);
-  }, [query, runSearch, setSearchParams]);
+    void runSearch(query);
+  }, [query, runSearch]);
 
   const handleSelect = useCallback(
     (group: Group) => {
@@ -72,6 +88,14 @@ export default function SearchPage() {
     },
     [navigate],
   );
+
+  const visibleGroups = useMemo(() => {
+    const filtered = filterGroups(groups, langs, qualities);
+    return sortGroups(filtered, sort);
+  }, [groups, langs, qualities, sort]);
+
+  const showSortBar = status === 'success' && groups.length > 0;
+  const trimmedQuery = committedQuery;
 
   return (
     <div className="grain vignette min-h-screen relative">
@@ -88,7 +112,7 @@ export default function SearchPage() {
           </p>
         </header>
 
-        <section className="max-w-2xl mx-auto mb-20">
+        <section className="max-w-2xl mx-auto mb-14">
           <SearchBar
             value={query}
             onChange={setQuery}
@@ -98,11 +122,20 @@ export default function SearchPage() {
         </section>
 
         <main>
-          {status === 'idle' && <IdleState />}
+          {showSortBar && (
+            <SortBar
+              sort={sort}
+              langs={langs}
+              qualities={qualities}
+              onSortChange={setSort}
+              onLangsChange={setLangs}
+              onQualitiesChange={setQualities}
+            />
+          )}
 
           {status === 'loading' && (
             <>
-              <SectionLabel>Searching</SectionLabel>
+              <SectionLabel>{mode === 'featured' ? 'Загружаем новинки' : 'Searching'}</SectionLabel>
               <MovieGridSkeleton />
             </>
           )}
@@ -111,17 +144,44 @@ export default function SearchPage() {
             <ErrorState message={errorText} onRetry={() => void runSearch(query)} />
           )}
 
-          {status === 'success' && groups.length === 0 && (
-            <NoResultsState query={query} />
+          {status === 'success' && groups.length === 0 && mode === 'search' && (
+            <NoResultsState query={trimmedQuery} />
+          )}
+
+          {status === 'success' && groups.length === 0 && mode === 'featured' && (
+            <FeaturedEmptyState />
           )}
 
           {status === 'success' && groups.length > 0 && (
             <>
               <SectionLabel>
-                {groups.length} result{groups.length === 1 ? '' : 's'} for{' '}
-                <span className="text-bone-50">"{query}"</span>
+                {mode === 'featured' ? (
+                  <>
+                    Новинки в HD
+                    <span className="text-bone-300/40 ml-2">
+                      · {visibleGroups.length} из {groups.length}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Результаты для{' '}
+                    <span className="text-bone-50">«{trimmedQuery}»</span>
+                    <span className="text-bone-300/40 ml-2">
+                      · {visibleGroups.length} из {groups.length}
+                    </span>
+                  </>
+                )}
               </SectionLabel>
-              <MovieGrid groups={groups} onSelect={handleSelect} />
+              {visibleGroups.length === 0 ? (
+                <FilteredOutState
+                  onReset={() => {
+                    setLangs([...DEFAULT_STATE.langs]);
+                    setQualities([...DEFAULT_STATE.qualities]);
+                  }}
+                />
+              ) : (
+                <MovieGrid groups={visibleGroups} onSelect={handleSelect} />
+              )}
             </>
           )}
         </main>
@@ -141,7 +201,20 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function IdleState() {
+function NoResultsState({ query }: { query: string }) {
+  return (
+    <div className="text-center pt-10 pb-24 max-w-md mx-auto animate-fade-in">
+      <p className="text-bone-50 text-xl tracking-tight">
+        Nothing for "<span className="text-ember-200">{query}</span>"
+      </p>
+      <p className="mt-3 text-bone-300/50 text-sm">
+        Try a different spelling, or a year.
+      </p>
+    </div>
+  );
+}
+
+function FeaturedEmptyState() {
   return (
     <div className="text-center pt-10 pb-24 max-w-xl mx-auto animate-fade-in">
       <p className="font-display italic text-2xl md:text-3xl text-bone-200/80 leading-relaxed tracking-tight">
@@ -154,15 +227,25 @@ function IdleState() {
   );
 }
 
-function NoResultsState({ query }: { query: string }) {
+function FilteredOutState({ onReset }: { onReset: () => void }) {
   return (
-    <div className="text-center pt-10 pb-24 max-w-md mx-auto animate-fade-in">
-      <p className="text-bone-50 text-xl tracking-tight">
-        Nothing for "<span className="text-ember-200">{query}</span>"
-      </p>
-      <p className="mt-3 text-bone-300/50 text-sm">
-        Try a different spelling, or a year.
-      </p>
+    <div className="text-center pt-6 pb-16 max-w-md mx-auto animate-fade-in">
+      <p className="text-bone-50 text-lg tracking-tight">Ничего не подходит под фильтры</p>
+      <p className="mt-2 text-bone-300/50 text-sm">Попробуй ослабить язык или качество.</p>
+      <button
+        onClick={onReset}
+        className="
+          focus-ring
+          mt-5 px-5 py-2.5
+          text-[11px] uppercase tracking-[0.2em] font-medium
+          text-ember-200 border border-ember-300/40
+          hover:bg-ember-400/[0.08] hover:border-ember-300/70
+          transition-colors
+        "
+        style={{ borderRadius: 1 }}
+      >
+        Сбросить фильтры
+      </button>
     </div>
   );
 }

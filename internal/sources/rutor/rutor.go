@@ -42,6 +42,14 @@ func (s *Source) Name() string { return name }
 func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, error) {
 	q := url.PathEscape(query)
 	u := fmt.Sprintf("%s/search/0/0/000/0/%s", baseURL, q)
+	doc, err := s.fetchDoc(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return parseRows(doc), nil
+}
+
+func (s *Source) fetchDoc(ctx context.Context, u string) (*goquery.Document, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -55,19 +63,28 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("rutor http %d", resp.StatusCode)
 	}
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	return goquery.NewDocumentFromReader(resp.Body)
+}
+
+// BrowseLatest fetches rutor's "Movies HD" category (first page) and parses
+// it the same way as a search result page. Used by the featured endpoint.
+func (s *Source) BrowseLatest(ctx context.Context) ([]sources.Torrent, error) {
+	doc, err := s.fetchDoc(ctx, baseURL+"/browse/0/4/000/0")
 	if err != nil {
 		return nil, err
 	}
+	return parseRows(doc), nil
+}
 
+// parseRows extracts torrents from a rutor table page (search or browse).
+// The two share the same row structure.
+func parseRows(doc *goquery.Document) []sources.Torrent {
 	var out []sources.Torrent
 	doc.Find("table tr").Each(func(_ int, tr *goquery.Selection) {
-		// Skip header/empty rows.
 		tds := tr.Find("td")
 		if tds.Length() < 4 {
 			return
 		}
-		// Find magnet link inside the row.
 		var magnet string
 		tr.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 			href, _ := a.Attr("href")
@@ -80,7 +97,6 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 		if magnet == "" {
 			return
 		}
-		// Title — first <a> that points to /torrent/<id> usually carries the human title.
 		var title, detailURL string
 		tr.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 			href, _ := a.Attr("href")
@@ -92,12 +108,9 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 			return true
 		})
 		if title == "" {
-			// Fallback: take whole row text from the title cell.
 			title = strings.TrimSpace(tds.Eq(1).Text())
 		}
 
-		// rutor column layout varies (with/without comments column). Scan all cells for the
-		// first one that parses as a real size (with KB/MB/GB unit) — bare integers are skipped.
 		var seedStr, leechStr string
 		n := tds.Length()
 		var size int64
@@ -107,7 +120,6 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 				break
 			}
 		}
-		// seeders/leechers are usually inside <span class="green">/<span class="red">.
 		if greens := tr.Find("span.green").First(); greens.Length() > 0 {
 			seedStr = strings.TrimSpace(greens.Text())
 		}
@@ -124,6 +136,7 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 		seeders, _ := strconv.Atoi(stripNonDigits(seedStr))
 		leechers, _ := strconv.Atoi(stripNonDigits(leechStr))
 		quality := sources.DetectQuality(title)
+		language := sources.DetectLanguage(title)
 		id := sources.MagnetInfoHash(magnet)
 
 		out = append(out, sources.Torrent{
@@ -136,9 +149,10 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 			Source:    name,
 			Magnet:    magnet,
 			DetailURL: detailURL,
+			Language:  language,
 		})
 	})
-	return out, nil
+	return out
 }
 
 // FetchPoster fetches a rutor detail page and extracts a likely poster URL.

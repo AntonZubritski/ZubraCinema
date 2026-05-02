@@ -14,9 +14,15 @@ import (
 
 var ErrNotFound = errors.New("torrent not found")
 
+const (
+	ModeStream   = "stream"
+	ModeDownload = "download"
+)
+
 type Item struct {
 	T       *atorrent.Torrent
 	AddedAt time.Time
+	Mode    string
 
 	mu              sync.Mutex
 	lastSampledAt   time.Time
@@ -52,7 +58,10 @@ func New(downloadDir string) (*Manager, error) {
 	}, nil
 }
 
-func (m *Manager) AddMagnet(ctx context.Context, magnet string) (*Item, error) {
+func (m *Manager) AddMagnet(ctx context.Context, magnet, mode string) (*Item, error) {
+	if mode != ModeDownload {
+		mode = ModeStream
+	}
 	t, err := m.cli.AddMagnet(magnet)
 	if err != nil {
 		return nil, err
@@ -65,12 +74,25 @@ func (m *Manager) AddMagnet(ctx context.Context, magnet string) (*Item, error) {
 	}
 	id := t.InfoHash().HexString()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.items[id]; ok {
+	existing, ok := m.items[id]
+	if ok {
+		// Promote stream→download if requested; never demote.
+		if mode == ModeDownload && existing.Mode != ModeDownload {
+			existing.Mode = ModeDownload
+			t := existing.T
+			m.mu.Unlock()
+			t.DownloadAll()
+			return existing, nil
+		}
+		m.mu.Unlock()
 		return existing, nil
 	}
-	item := &Item{T: t, AddedAt: time.Now()}
+	item := &Item{T: t, AddedAt: time.Now(), Mode: mode}
 	m.items[id] = item
+	m.mu.Unlock()
+	if mode == ModeDownload {
+		t.DownloadAll()
+	}
 	return item, nil
 }
 
@@ -140,6 +162,7 @@ func (m *Manager) Snapshot(item *Item, includeFiles bool) TorrentInfo {
 		Progress:     progress,
 		DownloadRate: rate,
 		Peers:        peers,
+		Mode:         item.Mode,
 	}
 
 	if includeFiles {

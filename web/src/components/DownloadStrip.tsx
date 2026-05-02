@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { listActiveTorrents, type ActiveTorrent } from '../api';
+import { formatRate } from '../lib/format';
 import { ProgressBar } from './ProgressBar';
 
 const POLL_MS = 3000;
@@ -63,6 +64,13 @@ export function DownloadStrip() {
         >
           <div className="flex items-center gap-2 mb-1.5">
             <span className="inline-block w-1 h-1 bg-ember-300 rounded-full animate-pulse flex-shrink-0" />
+            <span
+              className="text-[10px] text-ember-200/80 flex-shrink-0"
+              title={t.mode === 'download' ? 'Download' : 'Stream'}
+              aria-hidden="true"
+            >
+              {t.mode === 'download' ? '↓' : '▶'}
+            </span>
             <span className="text-xs text-bone-100/90 truncate group-hover:text-ember-100 transition-colors">
               {t.name}
             </span>
@@ -70,7 +78,11 @@ export function DownloadStrip() {
           <ProgressBar progress={t.progress} thin />
           <div className="flex items-center justify-between mt-1.5 text-[10px] tabular-nums text-bone-300/50">
             <span>{(Math.max(0, Math.min(1, t.progress)) * 100).toFixed(0)}%</span>
-            <span>{t.peers} peer{t.peers === 1 ? '' : 's'}</span>
+            <span className="flex items-center gap-2">
+              <span>{formatRate(t.downloadRate)}</span>
+              <span className="text-bone-300/30">·</span>
+              <span>{t.peers} peer{t.peers === 1 ? '' : 's'}</span>
+            </span>
           </div>
         </button>
       ))}

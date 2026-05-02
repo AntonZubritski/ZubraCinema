@@ -7,7 +7,10 @@ export type GroupTorrent = {
   quality: string | null;
   source: string;
   magnet: string;
+  language: string;
 };
+
+export type TorrentMode = 'stream' | 'download';
 
 export type Group = {
   id: string;
@@ -32,10 +35,12 @@ export type ActiveTorrent = {
   downloadRate: number;
   peers: number;
   totalSize: number;
+  mode?: TorrentMode;
 };
 
 export type TorrentDetail = ActiveTorrent & {
   files: Required<TorrentFile>[];
+  mode?: TorrentMode;
 };
 
 export type TorrentSession = {
@@ -43,6 +48,7 @@ export type TorrentSession = {
   name: string;
   totalSize: number;
   files: TorrentFile[];
+  mode?: TorrentMode;
 };
 
 export class ApiError extends Error {
@@ -89,11 +95,24 @@ export async function searchGroups(query: string, signal?: AbortSignal): Promise
   return Array.isArray(data) ? (data as Group[]) : [];
 }
 
-export async function startTorrent(magnet: string): Promise<TorrentSession> {
+export async function fetchFeatured(signal?: AbortSignal): Promise<Group[]> {
+  const res = await fetch('/api/featured', { signal });
+  if (!res.ok) {
+    const msg = await readErrorMessage(res, `Could not load featured (${res.status})`);
+    throw new ApiError(msg, res.status);
+  }
+  const data: unknown = await res.json();
+  return Array.isArray(data) ? (data as Group[]) : [];
+}
+
+export async function startTorrent(
+  magnet: string,
+  mode: TorrentMode = 'stream',
+): Promise<TorrentSession> {
   const res = await fetch('/api/torrents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ magnet }),
+    body: JSON.stringify({ magnet, mode }),
   });
   if (res.status === 504) {
     throw new ApiError('Metadata fetch timed out — try a torrent with more seeders', 504);

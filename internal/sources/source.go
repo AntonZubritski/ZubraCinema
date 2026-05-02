@@ -13,6 +13,7 @@ type Torrent struct {
 	Magnet    string  `json:"magnet"`
 	DetailURL string  `json:"-"`
 	PosterURL string  `json:"posterUrl"`
+	Language  string  `json:"language,omitempty"`
 }
 
 type Source interface {

@@ -114,6 +114,7 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 				Magnet:    magnet,
 				DetailURL: e.detail,
 				PosterURL: poster,
+				Language:  sources.DetectLanguage(e.title),
 			}
 		}(i)
 	}

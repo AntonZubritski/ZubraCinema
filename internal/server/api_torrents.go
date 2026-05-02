@@ -14,6 +14,7 @@ import (
 
 type addTorrentReq struct {
 	Magnet string `json:"magnet"`
+	Mode   string `json:"mode"`
 }
 
 func handleAddTorrent(m *ztorrent.Manager) http.HandlerFunc {
@@ -28,10 +29,20 @@ func handleAddTorrent(m *ztorrent.Manager) http.HandlerFunc {
 			http.Error(w, "invalid magnet URI", http.StatusBadRequest)
 			return
 		}
+		mode := strings.ToLower(strings.TrimSpace(body.Mode))
+		switch mode {
+		case "", ztorrent.ModeStream:
+			mode = ztorrent.ModeStream
+		case ztorrent.ModeDownload:
+			// ok
+		default:
+			http.Error(w, "invalid mode (expected 'stream' or 'download')", http.StatusBadRequest)
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		item, err := m.AddMagnet(ctx, body.Magnet)
+		item, err := m.AddMagnet(ctx, body.Magnet, mode)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				http.Error(w, "metadata fetch timeout", http.StatusGatewayTimeout)
