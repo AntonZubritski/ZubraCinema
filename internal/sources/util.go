@@ -62,18 +62,15 @@ func MagnetInfoHash(magnet string) string {
 	return ""
 }
 
-var sizeRe = regexp.MustCompile(`(?i)([\d.,]+)\s*(KB|KIB|MB|MIB|GB|GIB|TB|TIB|B)`)
+var sizeRe = regexp.MustCompile(`(?i)([\d.,]+)\s*(КБ|МБ|ГБ|ТБ|KB|KIB|MB|MIB|GB|GIB|TB|TIB)\b`)
 
-// ParseSize parses a human size like "1.4 GB" / "700 MiB" / "1234567890 bytes" → bytes.
-// Returns 0 if unparseable.
+// ParseSize parses a human size like "1.4 GB" / "700 MiB" / "13.7 ГБ" → bytes.
+// Returns 0 if no size unit is detected. Bare integers (e.g. comment counts) are NOT treated as bytes.
 func ParseSize(s string) int64 {
+	s = strings.ReplaceAll(s, " ", " ") // nbsp → space (rutor uses &nbsp;)
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0
-	}
-	// pure integer? bytes
-	if n, err := strconv.ParseInt(strings.ReplaceAll(s, ",", ""), 10, 64); err == nil {
-		return n
 	}
 	m := sizeRe.FindStringSubmatch(s)
 	if len(m) != 3 {
@@ -86,15 +83,13 @@ func ParseSize(s string) int64 {
 	}
 	mult := int64(1)
 	switch strings.ToUpper(m[2]) {
-	case "B":
-		mult = 1
-	case "KB", "KIB":
+	case "КБ", "KB", "KIB":
 		mult = 1024
-	case "MB", "MIB":
+	case "МБ", "MB", "MIB":
 		mult = 1024 * 1024
-	case "GB", "GIB":
+	case "ГБ", "GB", "GIB":
 		mult = 1024 * 1024 * 1024
-	case "TB", "TIB":
+	case "ТБ", "TB", "TIB":
 		mult = 1024 * 1024 * 1024 * 1024
 	}
 	return int64(v * float64(mult))

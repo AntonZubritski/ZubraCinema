@@ -10,7 +10,7 @@ export default function App() {
     <>
       <Routes>
         <Route path="/" element={<SearchPage />} />
-        <Route path="/movie/:tmdbId" element={<MoviePage />} />
+        <Route path="/movie/:groupId" element={<MoviePage />} />
         <Route path="/play/:torrentId" element={<PlayerPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

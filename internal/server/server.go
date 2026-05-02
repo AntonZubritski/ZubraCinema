@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
-	"github.com/AntonZubritski/ZubraCinema/internal/metadata/tmdb"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 	webroot "github.com/AntonZubritski/ZubraCinema/web"
@@ -16,17 +15,14 @@ import (
 
 type Deps struct {
 	Manager    *ztorrent.Manager
-	TMDB       *tmdb.Client
 	Aggregator *sources.Aggregator
 }
 
 func New(d Deps) http.Handler {
 	mux := http.NewServeMux()
 
-	// Search & metadata
-	mux.HandleFunc("GET /api/search", handleTMDBSearch(d.TMDB))
-	mux.HandleFunc("GET /api/movie/{tmdbId}", handleMovieDetail(d.TMDB))
-	mux.HandleFunc("GET /api/movie/{tmdbId}/torrents", handleMovieTorrents(d.TMDB, d.Aggregator))
+	// Search (grouped torrents pulled directly from trackers).
+	mux.HandleFunc("GET /api/search", handleSearch(d.Aggregator))
 
 	// Torrent CRUD
 	mux.HandleFunc("POST /api/torrents", handleAddTorrent(d.Manager))

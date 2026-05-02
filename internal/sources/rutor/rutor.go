@@ -81,11 +81,12 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 			return
 		}
 		// Title — first <a> that points to /torrent/<id> usually carries the human title.
-		var title string
+		var title, detailURL string
 		tr.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 			href, _ := a.Attr("href")
 			if strings.HasPrefix(href, "/torrent/") {
 				title = strings.TrimSpace(a.Text())
+				detailURL = baseURL + href
 				return false
 			}
 			return true
@@ -95,14 +96,18 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 			title = strings.TrimSpace(tds.Eq(1).Text())
 		}
 
-		// Size: typically tds.Eq(tds.Length()-3) or so. rutor layout has columns:
-		// [date] [name] [comments?] [size] [seeders] [leechers]
-		var sizeStr, seedStr, leechStr string
+		// rutor column layout varies (with/without comments column). Scan all cells for the
+		// first one that parses as a real size (with KB/MB/GB unit) — bare integers are skipped.
+		var seedStr, leechStr string
 		n := tds.Length()
-		if n >= 4 {
-			sizeStr = strings.TrimSpace(tds.Eq(n - 3).Text())
+		var size int64
+		for i := n - 1; i >= 0; i-- {
+			if v := sources.ParseSize(strings.TrimSpace(tds.Eq(i).Text())); v > 0 {
+				size = v
+				break
+			}
 		}
-		// seeders/leechers are usually inside <span class="green">/<span class="red"> in the last cell or last two cells.
+		// seeders/leechers are usually inside <span class="green">/<span class="red">.
 		if greens := tr.Find("span.green").First(); greens.Length() > 0 {
 			seedStr = strings.TrimSpace(greens.Text())
 		}
@@ -118,22 +123,92 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 
 		seeders, _ := strconv.Atoi(stripNonDigits(seedStr))
 		leechers, _ := strconv.Atoi(stripNonDigits(leechStr))
-		size := sources.ParseSize(sizeStr)
 		quality := sources.DetectQuality(title)
 		id := sources.MagnetInfoHash(magnet)
 
 		out = append(out, sources.Torrent{
-			ID:       id,
-			Title:    title,
-			Size:     size,
-			Seeders:  seeders,
-			Leechers: leechers,
-			Quality:  quality,
-			Source:   name,
-			Magnet:   magnet,
+			ID:        id,
+			Title:     title,
+			Size:      size,
+			Seeders:   seeders,
+			Leechers:  leechers,
+			Quality:   quality,
+			Source:    name,
+			Magnet:    magnet,
+			DetailURL: detailURL,
 		})
 	})
 	return out, nil
+}
+
+// FetchPoster fetches a rutor detail page and extracts a likely poster URL.
+// Returns "" if no candidate is found or the request fails.
+func (s *Source) FetchPoster(ctx context.Context, detailURL string) (string, error) {
+	if detailURL == "" {
+		return "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, detailURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", sources.UserAgent)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("rutor detail http %d", resp.StatusCode)
+	}
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Search descriptive area first.
+	scopes := []*goquery.Selection{
+		doc.Find("#index"),
+		doc.Find(".index2"),
+		doc.Find("table#details"),
+		doc.Selection,
+	}
+	for _, sc := range scopes {
+		if sc == nil || sc.Length() == 0 {
+			continue
+		}
+		var found string
+		sc.Find("img").EachWithBreak(func(_ int, img *goquery.Selection) bool {
+			src, ok := img.Attr("src")
+			if !ok {
+				return true
+			}
+			src = strings.TrimSpace(src)
+			if src == "" || strings.HasPrefix(src, "data:") {
+				return true
+			}
+			low := strings.ToLower(src)
+			// Skip tracker chrome, tiny icons, and known ad/placeholder hosts.
+			if strings.Contains(low, "smile") || strings.Contains(low, "icon") ||
+				strings.Contains(low, "logo") || strings.Contains(low, "rating") ||
+				strings.Contains(low, "cdnbunny") || strings.Contains(low, "smartadserver") ||
+				strings.Contains(low, "/ad/") || strings.Contains(low, "banner") ||
+				strings.Contains(low, "/m.png") || strings.Contains(low, "spacer") ||
+				strings.HasSuffix(low, ".gif") {
+				return true
+			}
+			if strings.HasPrefix(src, "//") {
+				src = "http:" + src
+			} else if strings.HasPrefix(src, "/") {
+				src = baseURL + src
+			}
+			found = src
+			return false
+		})
+		if found != "" {
+			return found, nil
+		}
+	}
+	return "", nil
 }
 
 func stripNonDigits(s string) string {

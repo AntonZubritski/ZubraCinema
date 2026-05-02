@@ -1,80 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ApiError,
-  getMovie,
-  getMovieTorrents,
   startTorrent,
-  type MovieDetail,
-  type Torrent,
+  type Group,
+  type GroupTorrent,
 } from '../api';
-import { MovieHero } from '../components/MovieHero';
-import { TorrentRow, TorrentRowSkeleton } from '../components/TorrentRow';
+import { TorrentRow } from '../components/TorrentRow';
 import { useToast } from '../lib/toast';
 
-type DetailStatus = 'loading' | 'success' | 'error';
-type TorrentsStatus = 'loading' | 'success' | 'error';
+type LocationState = { group?: Group } | null;
+
+function initialsOf(title: string): string {
+  const cleaned = title.trim();
+  if (!cleaned) return '??';
+  const words = cleaned.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 0) return '??';
+  if (words.length === 1) {
+    const w = words[0];
+    return (w.length >= 2 ? w.slice(0, 2) : w).toUpperCase();
+  }
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
 
 export default function MoviePage() {
-  const params = useParams<{ tmdbId: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const showToast = useToast();
-  const tmdbId = Number(params.tmdbId);
-
-  const [detail, setDetail] = useState<MovieDetail | null>(null);
-  const [detailStatus, setDetailStatus] = useState<DetailStatus>('loading');
-  const [detailError, setDetailError] = useState('');
-
-  const [torrents, setTorrents] = useState<Torrent[]>([]);
-  const [torrentsStatus, setTorrentsStatus] = useState<TorrentsStatus>('loading');
-  const [torrentsError, setTorrentsError] = useState('');
+  const state = location.state as LocationState;
+  const group = state?.group ?? null;
 
   const [busyTorrentId, setBusyTorrentId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
-      setDetailStatus('error');
-      setDetailError('Invalid movie identifier');
-      return;
-    }
-
-    const ac = new AbortController();
-    setDetailStatus('loading');
-    setTorrentsStatus('loading');
-
-    void (async () => {
-      try {
-        const m = await getMovie(tmdbId, ac.signal);
-        if (ac.signal.aborted) return;
-        setDetail(m);
-        setDetailStatus('success');
-      } catch (err) {
-        if (ac.signal.aborted) return;
-        setDetailError(err instanceof Error ? err.message : 'Failed to load movie');
-        setDetailStatus('error');
-      }
-    })();
-
-    void (async () => {
-      try {
-        const list = await getMovieTorrents(tmdbId, ac.signal);
-        if (ac.signal.aborted) return;
-        setTorrents(list);
-        setTorrentsStatus('success');
-      } catch (err) {
-        if (ac.signal.aborted) return;
-        setTorrentsError(err instanceof Error ? err.message : 'Failed to load torrents');
-        setTorrentsStatus('error');
-      }
-    })();
-
-    return () => {
-      ac.abort();
-    };
-  }, [tmdbId]);
-
   const handlePick = useCallback(
-    async (torrent: Torrent) => {
+    async (torrent: GroupTorrent) => {
       if (busyTorrentId) return;
       setBusyTorrentId(torrent.id);
       try {
@@ -96,103 +55,84 @@ export default function MoviePage() {
 
   return (
     <div className="grain vignette min-h-screen relative">
-      <div className="relative z-10">
+      <div className="relative z-10 max-w-[1500px] mx-auto px-8 lg:px-14 pt-8 pb-24">
         <TopNav />
-
-        {detailStatus === 'loading' && <MovieHeroSkeleton />}
-        {detailStatus === 'error' && (
-          <DetailError message={detailError} />
+        {group ? (
+          <GroupView
+            group={group}
+            busyTorrentId={busyTorrentId}
+            onPick={handlePick}
+          />
+        ) : (
+          <MissingState />
         )}
-        {detailStatus === 'success' && detail && <MovieHero movie={detail} />}
-
-        <section className="max-w-[1500px] mx-auto px-8 lg:px-14 mt-16 md:mt-20 pb-24">
-          <SectionLabel>Available torrents</SectionLabel>
-
-          {torrentsStatus === 'loading' && (
-            <div className="space-y-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <TorrentRowSkeleton key={i} />
-              ))}
-            </div>
-          )}
-
-          {torrentsStatus === 'error' && (
-            <div className="text-center py-12 max-w-md mx-auto">
-              <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80 mb-3">
-                Could not load torrents
-              </p>
-              <p className="text-bone-200/80 text-sm">{torrentsError}</p>
-            </div>
-          )}
-
-          {torrentsStatus === 'success' && torrents.length === 0 && (
-            <div className="text-center py-12 max-w-md mx-auto animate-fade-in">
-              <p className="font-display italic text-xl md:text-2xl text-bone-200/70 leading-relaxed tracking-tight">
-                "Not in the catalogue. Try a different title."
-              </p>
-            </div>
-          )}
-
-          {torrentsStatus === 'success' && torrents.length > 0 && (
-            <div className="space-y-2 animate-fade-in">
-              {torrents.map((t) => (
-                <TorrentRow
-                  key={t.id}
-                  torrent={t}
-                  busy={busyTorrentId === t.id}
-                  disabled={busyTorrentId !== null && busyTorrentId !== t.id}
-                  onPick={handlePick}
-                />
-              ))}
-            </div>
-          )}
-        </section>
       </div>
     </div>
   );
 }
 
-function TopNav() {
-  return (
-    <div className="absolute top-0 inset-x-0 z-20 px-8 lg:px-14 pt-6">
-      <Link
-        to="/"
-        className="
-          focus-ring
-          inline-flex items-center gap-2
-          text-[11px] uppercase tracking-[0.25em] font-medium
-          text-bone-200/80 hover:text-ember-200
-          transition-colors
-        "
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <path d="M15 18l-6-6 6-6" />
-        </svg>
-        <span>Back</span>
-      </Link>
-    </div>
-  );
-}
+function GroupView({
+  group,
+  busyTorrentId,
+  onPick,
+}: {
+  group: Group;
+  busyTorrentId: string | null;
+  onPick: (t: GroupTorrent) => void;
+}) {
+  const sortedTorrents = [...group.torrents].sort((a, b) => b.seeders - a.seeders);
 
-function MovieHeroSkeleton() {
   return (
-    <div className="relative w-full">
-      <div className="w-full skeleton-shimmer" style={{ height: 'min(50vh, 540px)' }} />
-      <div className="max-w-[1500px] mx-auto px-8 lg:px-14 -mt-32 md:-mt-40 relative">
-        <div className="flex flex-col md:flex-row gap-8 md:gap-10 items-start">
-          <div
-            className="flex-shrink-0 w-44 md:w-[280px] skeleton-shimmer"
-            style={{ aspectRatio: '2 / 3', borderRadius: 2 }}
-          />
-          <div className="flex-1 min-w-0 pt-2 md:pt-16 space-y-4 w-full">
-            <div className="h-12 md:h-16 skeleton-shimmer w-3/4" style={{ borderRadius: 2 }} />
-            <div className="h-3 skeleton-shimmer w-1/2" style={{ borderRadius: 1 }} />
-            <div className="h-3 skeleton-shimmer w-1/3" style={{ borderRadius: 1 }} />
-            <div className="space-y-2 pt-4">
-              <div className="h-3 skeleton-shimmer w-full" style={{ borderRadius: 1 }} />
-              <div className="h-3 skeleton-shimmer w-5/6" style={{ borderRadius: 1 }} />
-              <div className="h-3 skeleton-shimmer w-2/3" style={{ borderRadius: 1 }} />
-            </div>
+    <div className="mt-10 md:mt-14 animate-fade-in">
+      <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)] gap-8 md:gap-12">
+        <div className="md:sticky md:top-8 self-start">
+          <Poster posterUrl={group.posterUrl} title={group.title} />
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/70 mb-3">
+            Title
+          </p>
+          <h1 className="font-display text-4xl md:text-5xl lg:text-6xl text-bone-50 tracking-tightest leading-[1.05] break-words">
+            {group.title}
+          </h1>
+          <div className="mt-4 flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.25em]">
+            {group.year > 0 && (
+              <>
+                <span className="text-bone-300/70 tabular-nums">{group.year}</span>
+                <span className="text-bone-300/30">·</span>
+              </>
+            )}
+            <span className="text-ember-300 font-semibold tabular-nums">
+              {group.torrents.length}
+            </span>
+            <span className="text-bone-300/70">
+              release{group.torrents.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <div className="mt-10 md:mt-12">
+            <SectionLabel>Available torrents</SectionLabel>
+
+            {sortedTorrents.length === 0 ? (
+              <div className="text-center py-12 max-w-md mx-auto animate-fade-in">
+                <p className="font-display italic text-xl md:text-2xl text-bone-200/70 leading-relaxed tracking-tight">
+                  "Nothing playable on this reel."
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 animate-fade-in">
+                {sortedTorrents.map((t) => (
+                  <TorrentRow
+                    key={t.id}
+                    torrent={t}
+                    busy={busyTorrentId === t.id}
+                    disabled={busyTorrentId !== null && busyTorrentId !== t.id}
+                    onPick={onPick}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -200,19 +140,72 @@ function MovieHeroSkeleton() {
   );
 }
 
-function DetailError({ message }: { message: string }) {
+function Poster({ posterUrl, title }: { posterUrl: string; title: string }) {
+  const [failed, setFailed] = useState(false);
+  const showFallback = posterUrl.length === 0 || failed;
+  const initials = initialsOf(title);
+
   return (
-    <div className="max-w-xl mx-auto px-8 pt-32 pb-12 text-center animate-fade-in">
-      <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80 mb-3">
-        Could not load this title
+    <div
+      className="
+        relative w-full overflow-hidden
+        bg-ink-900
+        ring-1 ring-ink-700/60
+      "
+      style={{ aspectRatio: '2 / 3', borderRadius: 2 }}
+    >
+      {showFallback ? (
+        <div
+          className="
+            absolute inset-0
+            border border-ember-300/20
+            flex items-center justify-center
+            overflow-hidden
+          "
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-ember-400/[0.05] via-transparent to-ember-400/[0.02] pointer-events-none" />
+          <span
+            className="
+              font-display text-bone-50/40
+              tracking-tightest leading-none
+              select-none
+            "
+            style={{ fontSize: 'clamp(3.5rem, 8vw, 6rem)' }}
+          >
+            {initials}
+          </span>
+        </div>
+      ) : (
+        <img
+          src={posterUrl}
+          alt={title}
+          onError={() => setFailed(true)}
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      )}
+    </div>
+  );
+}
+
+function MissingState() {
+  return (
+    <div className="mt-24 max-w-xl mx-auto text-center animate-fade-in">
+      <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80 mb-4">
+        Off the reel
       </p>
-      <p className="text-bone-50 text-lg tracking-tight">{message}</p>
+      <h1 className="font-display text-3xl md:text-4xl text-bone-50 tracking-tightest leading-[1.1]">
+        Not found in current results
+      </h1>
+      <p className="mt-5 text-bone-200/70 text-base leading-relaxed tracking-tight">
+        This page only lives while you have search results loaded. Run the search again to
+        pick a release.
+      </p>
       <Link
         to="/"
         className="
           focus-ring
           inline-flex items-center
-          mt-6 px-6 py-3
+          mt-8 px-6 py-3
           text-xs uppercase tracking-[0.18em] font-medium
           text-bone-50
           bg-ember-400 hover:bg-ember-300
@@ -223,6 +216,26 @@ function DetailError({ message }: { message: string }) {
         Back to search
       </Link>
     </div>
+  );
+}
+
+function TopNav() {
+  return (
+    <Link
+      to="/"
+      className="
+        focus-ring
+        inline-flex items-center gap-2
+        text-[11px] uppercase tracking-[0.25em] font-medium
+        text-bone-200/80 hover:text-ember-200
+        transition-colors
+      "
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <path d="M15 18l-6-6 6-6" />
+      </svg>
+      <span>Back</span>
+    </Link>
   );
 }
 

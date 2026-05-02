@@ -1,35 +1,29 @@
 package server
 
 import (
-	"errors"
-	"log"
 	"net/http"
 	"strings"
 
-	"github.com/AntonZubritski/ZubraCinema/internal/metadata/tmdb"
+	"github.com/AntonZubritski/ZubraCinema/internal/grouping"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 )
 
-func handleTMDBSearch(client *tmdb.Client) http.HandlerFunc {
+const maxGroups = 20
+
+func handleSearch(agg *sources.Aggregator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := strings.TrimSpace(r.URL.Query().Get("q"))
 		if q == "" {
-			writeJSON(w, http.StatusOK, []tmdb.Movie{})
+			writeJSON(w, http.StatusOK, []grouping.Group{})
 			return
 		}
-		if client == nil || !client.Configured() {
-			writeError(w, http.StatusServiceUnavailable, "TMDB_API_KEY not configured")
-			return
+
+		torrents := agg.Search(r.Context(), q)
+		torrents = agg.EnrichPosters(r.Context(), torrents)
+		groups := grouping.GroupTorrents(torrents)
+		if len(groups) > maxGroups {
+			groups = groups[:maxGroups]
 		}
-		movies, err := client.Search(r.Context(), q)
-		if err != nil {
-			if errors.Is(err, tmdb.ErrNotConfigured) {
-				writeError(w, http.StatusServiceUnavailable, "TMDB_API_KEY not configured")
-				return
-			}
-			log.Printf("tmdb search error: %v", err)
-			http.Error(w, "search failed", http.StatusBadGateway)
-			return
-		}
-		writeJSON(w, http.StatusOK, movies)
+		writeJSON(w, http.StatusOK, groups)
 	}
 }

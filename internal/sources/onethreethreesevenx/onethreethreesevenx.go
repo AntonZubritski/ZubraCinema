@@ -99,19 +99,21 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 		go func(i int) {
 			defer wg.Done()
 			e := entries[i]
-			magnet, err := s.fetchMagnet(ctx, e.detail)
+			magnet, poster, err := s.fetchDetail(ctx, e.detail)
 			if err != nil || magnet == "" {
 				return
 			}
 			out[i] = sources.Torrent{
-				ID:       sources.MagnetInfoHash(magnet),
-				Title:    e.title,
-				Size:     e.size,
-				Seeders:  e.seeders,
-				Leechers: e.leechers,
-				Quality:  sources.DetectQuality(e.title),
-				Source:   name,
-				Magnet:   magnet,
+				ID:        sources.MagnetInfoHash(magnet),
+				Title:     e.title,
+				Size:      e.size,
+				Seeders:   e.seeders,
+				Leechers:  e.leechers,
+				Quality:   sources.DetectQuality(e.title),
+				Source:    name,
+				Magnet:    magnet,
+				DetailURL: e.detail,
+				PosterURL: poster,
 			}
 		}(i)
 	}
@@ -126,25 +128,24 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 	return filtered, nil
 }
 
-func (s *Source) fetchMagnet(ctx context.Context, detailURL string) (string, error) {
+func (s *Source) fetchDetail(ctx context.Context, detailURL string) (magnet, poster string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, detailURL, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("User-Agent", sources.UserAgent)
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("1337x detail http %d", resp.StatusCode)
+		return "", "", fmt.Errorf("1337x detail http %d", resp.StatusCode)
 	}
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	var magnet string
 	doc.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 		href, _ := a.Attr("href")
 		if strings.HasPrefix(href, "magnet:") {
@@ -153,5 +154,32 @@ func (s *Source) fetchMagnet(ctx context.Context, detailURL string) (string, err
 		}
 		return true
 	})
-	return magnet, nil
+	candidates := []string{
+		"div.torrent-image img",
+		".torrent-image img",
+		"div.box-info-detail img",
+		".tab-pane img",
+	}
+	for _, sel := range candidates {
+		img := doc.Find(sel).First()
+		if img.Length() == 0 {
+			continue
+		}
+		src, ok := img.Attr("src")
+		if !ok {
+			src, _ = img.Attr("data-src")
+		}
+		src = strings.TrimSpace(src)
+		if src == "" || strings.HasPrefix(src, "data:") {
+			continue
+		}
+		if strings.HasPrefix(src, "//") {
+			src = "https:" + src
+		} else if strings.HasPrefix(src, "/") {
+			src = baseURL + src
+		}
+		poster = src
+		break
+	}
+	return magnet, poster, nil
 }

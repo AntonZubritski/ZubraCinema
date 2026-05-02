@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError, searchMovies, type Movie } from '../api';
+import { ApiError, searchGroups, type Group } from '../api';
 import { SearchBar } from '../components/SearchBar';
 import { MovieGrid, MovieGridSkeleton } from '../components/MovieGrid';
 
@@ -11,9 +11,8 @@ export default function SearchPage() {
   const initialQ = searchParams.get('q') ?? '';
   const [query, setQuery] = useState(initialQ);
   const [status, setStatus] = useState<Status>('idle');
-  const [movies, setMovies] = useState<Movie[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [errorText, setErrorText] = useState<string>('');
-  const [errorCode, setErrorCode] = useState<string | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
 
@@ -28,19 +27,17 @@ export default function SearchPage() {
 
       setStatus('loading');
       setErrorText('');
-      setErrorCode(undefined);
 
       try {
-        const results = await searchMovies(trimmed, ac.signal);
+        const results = await searchGroups(trimmed, ac.signal);
         if (ac.signal.aborted) return;
-        setMovies(results);
+        setGroups(results);
         setStatus('success');
       } catch (err) {
         if (ac.signal.aborted) return;
         if (err instanceof Error && err.name === 'AbortError') return;
         if (err instanceof ApiError) {
           setErrorText(err.message);
-          setErrorCode(err.code);
         } else if (err instanceof Error) {
           setErrorText(err.message);
         } else {
@@ -70,8 +67,8 @@ export default function SearchPage() {
   }, [query, runSearch, setSearchParams]);
 
   const handleSelect = useCallback(
-    (movie: Movie) => {
-      navigate(`/movie/${movie.tmdbId}`);
+    (group: Group) => {
+      navigate(`/movie/${encodeURIComponent(group.id)}`, { state: { group } });
     },
     [navigate],
   );
@@ -111,24 +108,20 @@ export default function SearchPage() {
           )}
 
           {status === 'error' && (
-            <ErrorState
-              message={errorText}
-              code={errorCode}
-              onRetry={() => void runSearch(query)}
-            />
+            <ErrorState message={errorText} onRetry={() => void runSearch(query)} />
           )}
 
-          {status === 'success' && movies.length === 0 && (
+          {status === 'success' && groups.length === 0 && (
             <NoResultsState query={query} />
           )}
 
-          {status === 'success' && movies.length > 0 && (
+          {status === 'success' && groups.length > 0 && (
             <>
               <SectionLabel>
-                {movies.length} result{movies.length === 1 ? '' : 's'} for{' '}
+                {groups.length} result{groups.length === 1 ? '' : 's'} for{' '}
                 <span className="text-bone-50">"{query}"</span>
               </SectionLabel>
-              <MovieGrid movies={movies} onSelect={handleSelect} />
+              <MovieGrid groups={groups} onSelect={handleSelect} />
             </>
           )}
         </main>
@@ -176,44 +169,11 @@ function NoResultsState({ query }: { query: string }) {
 
 function ErrorState({
   message,
-  code,
   onRetry,
 }: {
   message: string;
-  code: string | undefined;
   onRetry: () => void;
 }) {
-  if (code === 'TMDB_NOT_CONFIGURED') {
-    return (
-      <div className="max-w-xl mx-auto animate-fade-in pt-10 pb-24">
-        <div
-          className="border border-ember-300/30 bg-ember-400/[0.04] p-6"
-          style={{ borderRadius: 2 }}
-        >
-          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80 mb-3">
-            TMDB key required
-          </p>
-          <p className="text-bone-50 text-base tracking-tight leading-relaxed">
-            Set <code className="text-ember-200 font-mono">ZUBRACINEMA_TMDB_KEY</code> to
-            your TMDB API key, then restart the app.
-          </p>
-          <p className="mt-3 text-bone-300/60 text-sm leading-relaxed">
-            Get one free at{' '}
-            <a
-              href="https://www.themoviedb.org/settings/api"
-              target="_blank"
-              rel="noreferrer"
-              className="text-ember-200 hover:text-ember-100 underline underline-offset-2 decoration-ember-300/40"
-            >
-              themoviedb.org/settings/api
-            </a>
-            .
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="text-center pt-10 pb-24 max-w-md mx-auto animate-fade-in">
       <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80 mb-3">

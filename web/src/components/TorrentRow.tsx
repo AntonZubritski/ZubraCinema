@@ -1,12 +1,12 @@
-import type { Torrent } from '../api';
+import type { GroupTorrent } from '../api';
 import { formatBytes } from '../lib/format';
 import { Spinner } from './Spinner';
 
 type Props = {
-  torrent: Torrent;
+  torrent: GroupTorrent;
   busy: boolean;
   disabled: boolean;
-  onPick: (torrent: Torrent) => void;
+  onPick: (torrent: GroupTorrent) => void;
 };
 
 export function TorrentRow({ torrent, busy, disabled, onPick }: Props) {

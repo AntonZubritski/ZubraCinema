@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
-	"github.com/AntonZubritski/ZubraCinema/internal/metadata/tmdb"
 	"github.com/AntonZubritski/ZubraCinema/internal/server"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/onethreethreesevenx"
@@ -24,10 +23,9 @@ import (
 )
 
 const (
-	defaultPort      = 7777
-	envPort          = "ZUBRACINEMA_PORT"
-	envTMDBKey       = "ZUBRACINEMA_TMDB_KEY"
-	envDownloadsDir  = "ZUBRACINEMA_DOWNLOADS_DIR"
+	defaultPort     = 7777
+	envPort         = "ZUBRACINEMA_PORT"
+	envDownloadsDir = "ZUBRACINEMA_DOWNLOADS_DIR"
 )
 
 func defaultDownloadsDir() string {
@@ -54,7 +52,6 @@ func main() {
 	port := flag.Int("port", startPort, "HTTP port to listen on")
 	noBrowser := flag.Bool("no-browser", false, "skip auto-opening the browser")
 	downloadsDir := flag.String("downloads-dir", defaultDownloadsDir(), "directory for downloaded torrent data")
-	tmdbKey := flag.String("tmdb-key", os.Getenv(envTMDBKey), "TMDB API key (or set "+envTMDBKey+")")
 	flag.Parse()
 
 	if err := os.MkdirAll(*downloadsDir, 0o755); err != nil {
@@ -71,11 +68,6 @@ func main() {
 		}
 	}()
 
-	tmdbClient := tmdb.NewClient(*tmdbKey)
-	if !tmdbClient.Configured() {
-		log.Printf("warning: TMDB API key not set — /api/search and /api/movie/* will return 503 (set --tmdb-key or %s)", envTMDBKey)
-	}
-
 	agg := sources.NewAggregator(rutor.New(), onethreethreesevenx.New())
 
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
@@ -83,7 +75,6 @@ func main() {
 		Addr: addr,
 		Handler: server.New(server.Deps{
 			Manager:    mgr,
-			TMDB:       tmdbClient,
 			Aggregator: agg,
 		}),
 	}

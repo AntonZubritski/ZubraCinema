@@ -1,12 +1,12 @@
-import type { Movie } from '../api';
+import type { Group } from '../api';
 import { MovieCard } from './MovieCard';
 
 type Props = {
-  movies: Movie[];
-  onSelect: (movie: Movie) => void;
+  groups: Group[];
+  onSelect: (group: Group) => void;
 };
 
-export function MovieGrid({ movies, onSelect }: Props) {
+export function MovieGrid({ groups, onSelect }: Props) {
   return (
     <div
       className="
@@ -19,13 +19,13 @@ export function MovieGrid({ movies, onSelect }: Props) {
         animate-fade-in
       "
     >
-      {movies.map((m, i) => (
+      {groups.map((g, i) => (
         <div
-          key={m.tmdbId}
+          key={g.id}
           className="animate-rise-in"
           style={{ animationDelay: `${Math.min(i, 12) * 30}ms`, animationFillMode: 'backwards' }}
         >
-          <MovieCard movie={m} onClick={() => onSelect(m)} />
+          <MovieCard group={g} onClick={() => onSelect(g)} />
         </div>
       ))}
     </div>

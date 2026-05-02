@@ -1,20 +1,4 @@
-export type Movie = {
-  tmdbId: number;
-  title: string;
-  originalTitle: string;
-  year: number | null;
-  rating: number;
-  posterUrl: string;
-  backdropUrl: string | null;
-  overview: string;
-};
-
-export type MovieDetail = Movie & {
-  runtime: number | null;
-  genres: string[];
-};
-
-export type Torrent = {
+export type GroupTorrent = {
   id: string;
   title: string;
   size: number;
@@ -23,6 +7,14 @@ export type Torrent = {
   quality: string | null;
   source: string;
   magnet: string;
+};
+
+export type Group = {
+  id: string;
+  title: string;
+  year: number;
+  posterUrl: string;
+  torrents: GroupTorrent[];
 };
 
 export type TorrentFile = {
@@ -87,40 +79,14 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
   return fallback;
 }
 
-export async function searchMovies(query: string, signal?: AbortSignal): Promise<Movie[]> {
+export async function searchGroups(query: string, signal?: AbortSignal): Promise<Group[]> {
   const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal });
-  if (res.status === 503) {
-    const msg = await readErrorMessage(res, 'TMDB_API_KEY not configured');
-    throw new ApiError(msg, 503, 'TMDB_NOT_CONFIGURED');
-  }
   if (!res.ok) {
     const msg = await readErrorMessage(res, `Search failed (${res.status})`);
     throw new ApiError(msg, res.status);
   }
   const data: unknown = await res.json();
-  return Array.isArray(data) ? (data as Movie[]) : [];
-}
-
-export async function getMovie(tmdbId: number, signal?: AbortSignal): Promise<MovieDetail> {
-  const res = await fetch(`/api/movie/${tmdbId}`, { signal });
-  if (!res.ok) {
-    const msg = await readErrorMessage(res, `Failed to load movie (${res.status})`);
-    throw new ApiError(msg, res.status);
-  }
-  return (await res.json()) as MovieDetail;
-}
-
-export async function getMovieTorrents(
-  tmdbId: number,
-  signal?: AbortSignal,
-): Promise<Torrent[]> {
-  const res = await fetch(`/api/movie/${tmdbId}/torrents`, { signal });
-  if (!res.ok) {
-    const msg = await readErrorMessage(res, `Failed to load torrents (${res.status})`);
-    throw new ApiError(msg, res.status);
-  }
-  const data: unknown = await res.json();
-  return Array.isArray(data) ? (data as Torrent[]) : [];
+  return Array.isArray(data) ? (data as Group[]) : [];
 }
 
 export async function startTorrent(magnet: string): Promise<TorrentSession> {
