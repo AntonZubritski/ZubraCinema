@@ -18,9 +18,12 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/server"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/apibay"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/eztv"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/onethreethreesevenx"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutracker"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/solidtorrents"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/torrentscsv"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/yts"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 )
@@ -84,6 +87,11 @@ func main() {
 		srcs = append(srcs, rutracker.New(rtLogin, os.Getenv(envRutrackerPassword)))
 		log.Printf("rutracker source enabled (login=%s)", rtLogin)
 	}
+	srcs = append(srcs,
+		torrentscsv.New(),
+		solidtorrents.New(),
+		eztv.New(),
+	)
 	agg := sources.NewAggregator(srcs...)
 
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))

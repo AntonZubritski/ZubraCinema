@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	perSourceTimeout  = 8 * time.Second
-	resultCap         = 80
+	perSourceTimeout  = 12 * time.Second
+	resultCap         = 150
 	enrichmentTimeout = 10 * time.Second
 	enrichmentLimit   = 8
 )
