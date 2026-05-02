@@ -8,7 +8,7 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 )
 
-const maxGroups = 20
+const maxGroups = 30
 
 func handleSearch(agg *sources.Aggregator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

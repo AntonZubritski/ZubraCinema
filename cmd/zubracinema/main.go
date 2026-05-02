@@ -17,15 +17,20 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
 	"github.com/AntonZubritski/ZubraCinema/internal/server"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/apibay"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/onethreethreesevenx"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutracker"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/yts"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 )
 
 const (
-	defaultPort     = 7777
-	envPort         = "ZUBRACINEMA_PORT"
-	envDownloadsDir = "ZUBRACINEMA_DOWNLOADS_DIR"
+	defaultPort           = 7777
+	envPort               = "ZUBRACINEMA_PORT"
+	envDownloadsDir       = "ZUBRACINEMA_DOWNLOADS_DIR"
+	envRutrackerLogin     = "ZUBRACINEMA_RUTRACKER_LOGIN"
+	envRutrackerPassword  = "ZUBRACINEMA_RUTRACKER_PASSWORD"
 )
 
 func defaultDownloadsDir() string {
@@ -69,7 +74,17 @@ func main() {
 	}()
 
 	rutorSrc := rutor.New()
-	agg := sources.NewAggregator(rutorSrc, onethreethreesevenx.New())
+	srcs := []sources.Source{
+		rutorSrc,
+		onethreethreesevenx.New(),
+		apibay.New(),
+		yts.New(),
+	}
+	if rtLogin := os.Getenv(envRutrackerLogin); rtLogin != "" {
+		srcs = append(srcs, rutracker.New(rtLogin, os.Getenv(envRutrackerPassword)))
+		log.Printf("rutracker source enabled (login=%s)", rtLogin)
+	}
+	agg := sources.NewAggregator(srcs...)
 
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
 	srv := &http.Server{
