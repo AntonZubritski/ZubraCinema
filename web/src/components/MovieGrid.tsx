@@ -21,7 +21,7 @@ export function MovieGrid({ movies, onSelect }: Props) {
     >
       {movies.map((m, i) => (
         <div
-          key={`${m.title}-${m.year}-${i}`}
+          key={m.tmdbId}
           className="animate-rise-in"
           style={{ animationDelay: `${Math.min(i, 12) * 30}ms`, animationFillMode: 'backwards' }}
         >

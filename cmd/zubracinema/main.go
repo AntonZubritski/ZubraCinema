@@ -9,18 +9,37 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
+	"github.com/AntonZubritski/ZubraCinema/internal/metadata/tmdb"
 	"github.com/AntonZubritski/ZubraCinema/internal/server"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/onethreethreesevenx"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
+	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 )
 
 const (
-	defaultPort = 7777
-	envPort     = "ZUBRACINEMA_PORT"
+	defaultPort      = 7777
+	envPort          = "ZUBRACINEMA_PORT"
+	envTMDBKey       = "ZUBRACINEMA_TMDB_KEY"
+	envDownloadsDir  = "ZUBRACINEMA_DOWNLOADS_DIR"
 )
+
+func defaultDownloadsDir() string {
+	if v := os.Getenv(envDownloadsDir); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", "ZubraCinema", "downloads")
+	}
+	return filepath.Join(home, "ZubraCinema", "downloads")
+}
 
 func main() {
 	startPort := defaultPort
@@ -34,17 +53,45 @@ func main() {
 
 	port := flag.Int("port", startPort, "HTTP port to listen on")
 	noBrowser := flag.Bool("no-browser", false, "skip auto-opening the browser")
+	downloadsDir := flag.String("downloads-dir", defaultDownloadsDir(), "directory for downloaded torrent data")
+	tmdbKey := flag.String("tmdb-key", os.Getenv(envTMDBKey), "TMDB API key (or set "+envTMDBKey+")")
 	flag.Parse()
+
+	if err := os.MkdirAll(*downloadsDir, 0o755); err != nil {
+		log.Fatalf("create downloads dir: %v", err)
+	}
+
+	mgr, err := ztorrent.New(*downloadsDir)
+	if err != nil {
+		log.Fatalf("init torrent manager: %v", err)
+	}
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			log.Printf("torrent client close: %v", err)
+		}
+	}()
+
+	tmdbClient := tmdb.NewClient(*tmdbKey)
+	if !tmdbClient.Configured() {
+		log.Printf("warning: TMDB API key not set — /api/search and /api/movie/* will return 503 (set --tmdb-key or %s)", envTMDBKey)
+	}
+
+	agg := sources.NewAggregator(rutor.New(), onethreethreesevenx.New())
 
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: server.New(),
+		Addr: addr,
+		Handler: server.New(server.Deps{
+			Manager:    mgr,
+			TMDB:       tmdbClient,
+			Aggregator: agg,
+		}),
 	}
 
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("ZubraCinema listening on http://%s", addr)
+		log.Printf("downloads dir: %s", *downloadsDir)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}

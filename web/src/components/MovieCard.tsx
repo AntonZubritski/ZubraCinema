@@ -10,6 +10,8 @@ export function MovieCard({ movie, onClick }: Props) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
 
+  const hasCover = movie.posterUrl && movie.posterUrl.length > 0;
+
   return (
     <button
       onClick={onClick}
@@ -26,17 +28,17 @@ export function MovieCard({ movie, onClick }: Props) {
         "
         style={{ aspectRatio: '2 / 3', borderRadius: 2 }}
       >
-        {!imgLoaded && !imgFailed && (
+        {!imgLoaded && !imgFailed && hasCover && (
           <div className="absolute inset-0 skeleton-shimmer" />
         )}
 
-        {imgFailed ? (
+        {!hasCover || imgFailed ? (
           <div className="absolute inset-0 flex items-center justify-center text-bone-300/40 text-xs uppercase tracking-widest">
             no cover
           </div>
         ) : (
           <img
-            src={movie.coverUrl}
+            src={movie.posterUrl}
             alt={movie.title}
             loading="lazy"
             onLoad={() => setImgLoaded(true)}
@@ -76,7 +78,7 @@ export function MovieCard({ movie, onClick }: Props) {
           "
         >
           <span className="inline-block text-[11px] uppercase tracking-[0.2em] text-ember-200/90 font-medium">
-            Watch
+            Open
           </span>
         </div>
       </div>
@@ -86,7 +88,7 @@ export function MovieCard({ movie, onClick }: Props) {
           {movie.title}
         </h3>
         <p className="text-bone-300/60 text-xs mt-1 tracking-wide">
-          {movie.year > 0 ? movie.year : '—'}
+          {movie.year !== null ? movie.year : '—'}
         </p>
       </div>
     </button>

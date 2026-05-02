@@ -8,18 +8,37 @@ import (
 	"strings"
 
 	"github.com/AntonZubritski/ZubraCinema/internal/launcher"
-	"github.com/AntonZubritski/ZubraCinema/internal/sources/yts"
+	"github.com/AntonZubritski/ZubraCinema/internal/metadata/tmdb"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
 	webroot "github.com/AntonZubritski/ZubraCinema/web"
 )
 
-func New() http.Handler {
+type Deps struct {
+	Manager    *ztorrent.Manager
+	TMDB       *tmdb.Client
+	Aggregator *sources.Aggregator
+}
+
+func New(d Deps) http.Handler {
 	mux := http.NewServeMux()
 
-	client := yts.NewClient()
+	// Search & metadata
+	mux.HandleFunc("GET /api/search", handleTMDBSearch(d.TMDB))
+	mux.HandleFunc("GET /api/movie/{tmdbId}", handleMovieDetail(d.TMDB))
+	mux.HandleFunc("GET /api/movie/{tmdbId}/torrents", handleMovieTorrents(d.TMDB, d.Aggregator))
 
-	mux.HandleFunc("/api/search", handleSearch(client))
-	mux.HandleFunc("/api/play", handlePlay())
+	// Torrent CRUD
+	mux.HandleFunc("POST /api/torrents", handleAddTorrent(d.Manager))
+	mux.HandleFunc("GET /api/torrents", handleListTorrents(d.Manager))
+	mux.HandleFunc("GET /api/torrents/{id}", handleGetTorrent(d.Manager))
+	mux.HandleFunc("DELETE /api/torrents/{id}", handleDeleteTorrent(d.Manager))
+	mux.HandleFunc("GET /api/torrents/{id}/stream/{fileIdx}", ztorrent.StreamHandler(d.Manager))
 
+	// Launcher (open URL in default app)
+	mux.HandleFunc("POST /api/launch", handleLaunch())
+
+	// SPA
 	distFS, err := fs.Sub(webroot.Dist, "dist")
 	if err != nil {
 		log.Fatalf("embed sub fs: %v", err)
@@ -29,54 +48,24 @@ func New() http.Handler {
 	return mux
 }
 
-func handleSearch(client *yts.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		q := strings.TrimSpace(r.URL.Query().Get("q"))
-		if q == "" {
-			writeJSON(w, http.StatusOK, []yts.Movie{})
-			return
-		}
-		movies, err := client.Search(r.Context(), q)
-		if err != nil {
-			log.Printf("search error: %v", err)
-			http.Error(w, "search failed", http.StatusBadGateway)
-			return
-		}
-		writeJSON(w, http.StatusOK, movies)
+func handleLaunch() http.HandlerFunc {
+	type req struct {
+		URL string `json:"url"`
 	}
-}
-
-type playRequest struct {
-	Magnet string `json:"magnet"`
-}
-
-func handlePlay() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var body playRequest
+		var body req
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		body.Magnet = strings.TrimSpace(body.Magnet)
-		if body.Magnet == "" {
-			http.Error(w, "magnet is required", http.StatusBadRequest)
+		body.URL = strings.TrimSpace(body.URL)
+		if body.URL == "" {
+			http.Error(w, "url is required", http.StatusBadRequest)
 			return
 		}
-		if !strings.HasPrefix(body.Magnet, "magnet:") {
-			http.Error(w, "invalid magnet URI", http.StatusBadRequest)
-			return
-		}
-		if err := launcher.OpenURL(body.Magnet); err != nil {
+		if err := launcher.OpenURL(body.URL); err != nil {
 			log.Printf("launcher error: %v", err)
-			http.Error(w, "failed to open magnet", http.StatusInternalServerError)
+			http.Error(w, "failed to open url", http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -117,4 +106,10 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		log.Printf("write json: %v", err)
 	}
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
