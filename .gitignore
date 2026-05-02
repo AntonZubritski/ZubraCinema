@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Build artefacts (заполнится когда выберем стек)
+dist/
+build/
+node_modules/
+target/
+*.exe
