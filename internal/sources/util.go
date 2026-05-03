@@ -9,6 +9,46 @@ import (
 
 const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
+// DefaultTrackers is the canonical tracker list embedded into magnet URIs we
+// build ourselves. Many trackers historically embedded by sources are dead or
+// rate-limited; this list focuses on currently live, public UDP/HTTPS trackers
+// to improve peer discovery in sparse swarms.
+var DefaultTrackers = []string{
+	"udp://tracker.opentrackr.org:1337/announce",
+	"udp://tracker.openbittorrent.com:6969/announce",
+	"udp://open.demonii.com:1337/announce",
+	"udp://open.stealth.si:80/announce",
+	"udp://exodus.desync.com:6969/announce",
+	"udp://tracker.torrent.eu.org:451/announce",
+	"udp://tracker.dler.org:6969/announce",
+	"udp://9.rarbg.com:2810/announce",
+	"udp://tracker.cyberia.is:6969/announce",
+	"udp://tracker.moeking.me:6969/announce",
+	"udp://retracker.lanta-net.ru:2710/announce",
+	"udp://opentracker.io:6969/announce",
+	"udp://p4p.arenabg.com:1337/announce",
+	"udp://tracker-udp.gbitt.info:80/announce",
+	"udp://tracker.tiny-vps.com:6969/announce",
+	"https://tracker.tamersunion.org:443/announce",
+}
+
+// BuildMagnet builds a magnet URI from an info hash (40-hex lowercase) and
+// display name. Uses the default tracker list.
+func BuildMagnet(infoHash, displayName string) string {
+	var b strings.Builder
+	b.WriteString("magnet:?xt=urn:btih:")
+	b.WriteString(infoHash)
+	if displayName != "" {
+		b.WriteString("&dn=")
+		b.WriteString(url.QueryEscape(displayName))
+	}
+	for _, t := range DefaultTrackers {
+		b.WriteString("&tr=")
+		b.WriteString(url.QueryEscape(t))
+	}
+	return b.String()
+}
+
 var qualityRe = regexp.MustCompile(`(?i)\b(2160p|4K|1080p|720p|480p|HDTV|WEB-?DL|BDRip|BluRay|DVDRip|HDRip|CAMRip|TS)\b`)
 
 // DetectQuality returns a normalized quality token or nil if unknown.

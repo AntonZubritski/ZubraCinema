@@ -6,6 +6,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,6 +48,11 @@ func New(downloadDir string) (*Manager, error) {
 	cfg.Seed = true
 	cfg.NoUpload = false
 	cfg.DisableIPv6 = false
+	if v := os.Getenv("ZUBRACINEMA_BT_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p >= 0 && p < 65536 {
+			cfg.ListenPort = p
+		}
+	}
 	cli, err := atorrent.NewClient(cfg)
 	if err != nil {
 		return nil, err

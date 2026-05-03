@@ -17,17 +17,6 @@ const (
 	baseURL = "https://yts.mx"
 )
 
-var trackers = []string{
-	"udp://open.demonii.com:1337/announce",
-	"udp://tracker.openbittorrent.com:80",
-	"udp://tracker.coppersurfer.tk:6969",
-	"udp://glotorrents.pw:6969/announce",
-	"udp://tracker.opentrackr.org:1337/announce",
-	"udp://torrent.gresille.org:80/announce",
-	"udp://p4p.arenabg.com:1337",
-	"udp://tracker.leechers-paradise.org:6969",
-}
-
 type Source struct {
 	http *http.Client
 }
@@ -108,7 +97,7 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 				parts = append(parts, t.Type)
 			}
 			title := strings.Join(parts, " ")
-			magnet := buildMagnet(hash, title)
+			magnet := sources.BuildMagnet(hash, title)
 			out = append(out, sources.Torrent{
 				ID:        hash,
 				Title:     title,
@@ -126,17 +115,3 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 	return out, nil
 }
 
-func buildMagnet(hash, displayName string) string {
-	var b strings.Builder
-	b.WriteString("magnet:?xt=urn:btih:")
-	b.WriteString(hash)
-	if displayName != "" {
-		b.WriteString("&dn=")
-		b.WriteString(url.QueryEscape(displayName))
-	}
-	for _, t := range trackers {
-		b.WriteString("&tr=")
-		b.WriteString(url.QueryEscape(t))
-	}
-	return b.String()
-}

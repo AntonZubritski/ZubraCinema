@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ApiError,
@@ -16,6 +16,12 @@ import { formatBytes, formatPercent, formatRate } from '../lib/format';
 const POLL_MS = 2000;
 
 type Status = 'loading' | 'success' | 'error';
+
+// PlaybackPhase tracks the <video> element's effective state for the overlay.
+//   'buffering' — initial state, no data has started playing yet
+//   'playing'   — onPlaying has fired at least once for the current src
+//   'error'     — onError fired (e.g. ERR_CONTENT_LENGTH_MISMATCH); browser gave up
+type PlaybackPhase = 'buffering' | 'playing' | 'error';
 
 function isVideoFile(mimeType: string | null, path: string): boolean {
   if (mimeType && mimeType.startsWith('video/')) return true;
@@ -42,6 +48,16 @@ export default function PlayerPage() {
   const [errorText, setErrorText] = useState('');
   const [stopping, setStopping] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [phase, setPhase] = useState<PlaybackPhase>('buffering');
+  const [overlayLaunching, setOverlayLaunching] = useState(false);
+
+  // Latest torrent reference for the unmount cleanup effect, which only fires
+  // when the page is actually torn down (otherwise it would re-fire on every
+  // poll tick that updates `torrent`).
+  const torrentRef = useRef<TorrentDetail | null>(null);
+  useEffect(() => {
+    torrentRef.current = torrent;
+  }, [torrent]);
 
   const fileQuery = searchParams.get('file');
   const requestedFileIdx = fileQuery !== null ? Number(fileQuery) : null;
@@ -113,6 +129,29 @@ export default function PlayerPage() {
     };
   }, [status, torrentId]);
 
+  // Reset playback phase whenever the active file (and thus videoSrc) changes,
+  // so that switching files in the picker re-shows the buffering overlay
+  // instead of inheriting a stale 'playing' / 'error' state from the previous
+  // <video> element.
+  useEffect(() => {
+    setPhase('buffering');
+  }, [activeFileIdx]);
+
+  // Auto-stop streaming torrents when leaving the page. Download mode stays
+  // running. Files are NOT deleted — partial pieces are kept on disk so the
+  // user can resume by re-adding the torrent. This keeps us gentle on the
+  // swarm and avoids burning bandwidth on something nobody is watching.
+  useEffect(() => {
+    return () => {
+      const t = torrentRef.current;
+      if (!t || !torrentId) return;
+      if (t.mode === 'download') return;
+      void deleteTorrent(torrentId, false).catch(() => {
+        // best-effort; ignore failures on unmount
+      });
+    };
+  }, [torrentId]);
+
   const handleSelectFile = useCallback(
     (idx: number) => {
       const next = new URLSearchParams(searchParams);
@@ -122,12 +161,17 @@ export default function PlayerPage() {
     [searchParams, setSearchParams],
   );
 
+  const launchInExternal = useCallback(async () => {
+    if (activeFileIdx === null) return;
+    const absoluteUrl = `${window.location.origin}${streamUrl(torrentId, activeFileIdx)}`;
+    await launchExternal(absoluteUrl);
+  }, [activeFileIdx, torrentId]);
+
   const handleExternal = useCallback(async () => {
     if (activeFileIdx === null || launching) return;
     setLaunching(true);
     try {
-      const absoluteUrl = `${window.location.origin}${streamUrl(torrentId, activeFileIdx)}`;
-      await launchExternal(absoluteUrl);
+      await launchInExternal();
       showToast('info', 'Opened in external player');
     } catch (err) {
       const msg =
@@ -140,7 +184,26 @@ export default function PlayerPage() {
     } finally {
       setLaunching(false);
     }
-  }, [activeFileIdx, launching, showToast, torrentId]);
+  }, [activeFileIdx, launching, launchInExternal, showToast]);
+
+  const handleOverlayExternal = useCallback(async () => {
+    if (activeFileIdx === null || overlayLaunching) return;
+    setOverlayLaunching(true);
+    try {
+      await launchInExternal();
+      showToast('info', 'Opened in external player');
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Could not launch external player';
+      showToast('error', msg);
+    } finally {
+      setOverlayLaunching(false);
+    }
+  }, [activeFileIdx, launchInExternal, overlayLaunching, showToast]);
 
   const handleStop = useCallback(async () => {
     if (stopping) return;
@@ -204,13 +267,19 @@ export default function PlayerPage() {
                   muted
                   src={videoSrc}
                   className="w-full h-auto block max-h-[calc(100vh-160px)]"
-                  onError={() =>
-                    showToast(
-                      'error',
-                      'Playback failed — try external player or another torrent.',
-                    )
-                  }
+                  onPlaying={() => setPhase('playing')}
+                  onError={() => setPhase('error')}
                 />
+                {phase !== 'playing' && (
+                  <PlaybackOverlay
+                    phase={phase}
+                    peers={torrent.peers}
+                    downloadRate={torrent.downloadRate}
+                    onExternal={handleOverlayExternal}
+                    launching={overlayLaunching}
+                    canLaunch={activeFileIdx !== null}
+                  />
+                )}
               </div>
             </div>
 
@@ -415,6 +484,77 @@ function PlayerSkeleton() {
         <div className="h-10 skeleton-shimmer w-full" style={{ borderRadius: 1 }} />
         <div className="h-10 skeleton-shimmer w-full" style={{ borderRadius: 1 }} />
       </div>
+    </div>
+  );
+}
+
+function PlaybackOverlay({
+  phase,
+  peers,
+  downloadRate,
+  onExternal,
+  launching,
+  canLaunch,
+}: {
+  phase: PlaybackPhase;
+  peers: number;
+  downloadRate: number;
+  onExternal: () => void;
+  launching: boolean;
+  canLaunch: boolean;
+}) {
+  const isError = phase === 'error';
+  return (
+    <div
+      className="
+        absolute inset-0 z-10
+        flex flex-col items-center justify-center
+        gap-4 px-6 text-center
+        bg-black/70 backdrop-blur-sm
+        animate-fade-in
+        pointer-events-none
+      "
+    >
+      {!isError && (
+        <>
+          <Spinner size={28} />
+          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
+            Подключение к swarm
+          </p>
+          <p className="text-bone-50 text-sm tabular-nums">
+            peers: {peers} · {formatRate(downloadRate)}
+          </p>
+        </>
+      )}
+      {isError && (
+        <>
+          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
+            Воспроизведение прервано
+          </p>
+          <p className="text-bone-50 text-base max-w-md tracking-tight">
+            Не удалось загрузить — попробуй внешний плеер или другую раздачу
+          </p>
+          <button
+            type="button"
+            onClick={onExternal}
+            disabled={launching || !canLaunch}
+            className="
+              focus-ring
+              pointer-events-auto
+              inline-flex items-center justify-center gap-2
+              mt-2 px-6 py-3
+              text-[11px] uppercase tracking-[0.2em] font-medium
+              text-bone-50 bg-ember-400 hover:bg-ember-300
+              disabled:opacity-60 disabled:cursor-not-allowed
+              transition-colors
+            "
+            style={{ borderRadius: 1 }}
+          >
+            {launching ? <Spinner size={12} /> : <ExternalIcon />}
+            <span>Открыть в плеере</span>
+          </button>
+        </>
+      )}
     </div>
   );
 }

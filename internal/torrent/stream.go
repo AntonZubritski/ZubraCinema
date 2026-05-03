@@ -5,6 +5,8 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+
+	atorrent "github.com/anacrolix/torrent"
 )
 
 func StreamHandler(m *Manager) http.HandlerFunc {
@@ -27,9 +29,24 @@ func StreamHandler(m *Manager) http.HandlerFunc {
 			return
 		}
 		f := files[fileIdx]
+
+		// Focus the swarm on the file we're actually streaming. Other files in
+		// the same torrent get de-prioritized so peer slots are spent on pieces
+		// we need now. This rebinds whenever a different file is opened.
+		for i, other := range files {
+			if i == fileIdx {
+				continue
+			}
+			other.SetPriority(atorrent.PiecePriorityNone)
+		}
+		f.SetPriority(atorrent.PiecePriorityHigh)
+		f.Download()
+
 		reader := f.NewReader()
 		defer reader.Close()
-		reader.SetReadahead(16 << 20)
+		// 64 MiB readahead keeps more pieces queued ahead of the read position
+		// so the browser doesn't starve as easily on slow swarms.
+		reader.SetReadahead(64 << 20)
 		reader.SetResponsive()
 		reader.SetContext(r.Context())
 

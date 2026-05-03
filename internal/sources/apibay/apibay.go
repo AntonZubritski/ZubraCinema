@@ -18,17 +18,6 @@ const (
 	baseURL = "https://apibay.org"
 )
 
-var trackers = []string{
-	"udp://tracker.coppersurfer.tk:6969/announce",
-	"udp://tracker.openbittorrent.com:6969/announce",
-	"udp://9.rarbg.to:2920/announce",
-	"udp://tracker.opentrackr.org:1337",
-	"udp://tracker.internetwarriors.net:1337/announce",
-	"udp://tracker.leechers-paradise.org:6969/announce",
-	"udp://tracker.pirateparty.gr:6969/announce",
-	"udp://tracker.cyberia.is:6969/announce",
-}
-
 type Source struct {
 	http *http.Client
 }
@@ -82,7 +71,7 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 		size, _ := strconv.ParseInt(it.Size, 10, 64)
 		seeders, _ := strconv.Atoi(it.Seeders)
 		leechers, _ := strconv.Atoi(it.Leechers)
-		magnet := buildMagnet(hash, it.Name)
+		magnet := sources.BuildMagnet(hash, it.Name)
 		out = append(out, sources.Torrent{
 			ID:       hash,
 			Title:    it.Name,
@@ -98,17 +87,3 @@ func (s *Source) Search(ctx context.Context, query string) ([]sources.Torrent, e
 	return out, nil
 }
 
-func buildMagnet(hash, displayName string) string {
-	var b strings.Builder
-	b.WriteString("magnet:?xt=urn:btih:")
-	b.WriteString(hash)
-	if displayName != "" {
-		b.WriteString("&dn=")
-		b.WriteString(url.QueryEscape(displayName))
-	}
-	for _, t := range trackers {
-		b.WriteString("&tr=")
-		b.WriteString(url.QueryEscape(t))
-	}
-	return b.String()
-}
