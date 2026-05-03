@@ -18,15 +18,30 @@ const POLL_MS = 2000;
 type Status = 'loading' | 'success' | 'error';
 
 // PlaybackPhase tracks the <video> element's effective state for the overlay.
-//   'buffering' — initial state, no data has started playing yet
-//   'playing'   — onPlaying has fired at least once for the current src
-//   'error'     — onError fired (e.g. ERR_CONTENT_LENGTH_MISMATCH); browser gave up
-type PlaybackPhase = 'buffering' | 'playing' | 'error';
+type PlaybackPhase = 'buffering' | 'stalled' | 'incompatible' | 'playing' | 'error';
+
+const STALL_TIMEOUT_MS = 15000;
+
+// Containers Chromium reliably plays inline. Anything else (mkv/avi/ts/...) is
+// shown as 'incompatible' immediately — better to route to mpv/VLC than waste
+// time on a <video> that will fail.
+const BROWSER_PLAYABLE_EXTS = new Set(['mp4', 'm4v', 'webm', 'mov', 'ogg', 'ogv']);
+
+function fileExt(path: string): string {
+  return path.toLowerCase().split('.').pop() ?? '';
+}
 
 function isVideoFile(mimeType: string | null, path: string): boolean {
   if (mimeType && mimeType.startsWith('video/')) return true;
-  const ext = path.toLowerCase().split('.').pop() ?? '';
-  return ['mp4', 'mkv', 'webm', 'avi', 'mov', 'm4v'].includes(ext);
+  const ext = fileExt(path);
+  return ['mp4', 'mkv', 'webm', 'avi', 'mov', 'm4v', 'ts', 'wmv', 'flv'].includes(ext);
+}
+
+function isBrowserPlayable(mimeType: string | null, path: string): boolean {
+  const ext = fileExt(path);
+  if (BROWSER_PLAYABLE_EXTS.has(ext)) return true;
+  if (mimeType === 'video/mp4' || mimeType === 'video/webm') return true;
+  return false;
 }
 
 function pickDefaultFile(torrent: TorrentDetail): number {
@@ -129,13 +144,28 @@ export default function PlayerPage() {
     };
   }, [status, torrentId]);
 
-  // Reset playback phase whenever the active file (and thus videoSrc) changes,
-  // so that switching files in the picker re-shows the buffering overlay
-  // instead of inheriting a stale 'playing' / 'error' state from the previous
-  // <video> element.
+  // Reset playback phase whenever the active file changes. If the file's
+  // container isn't browser-playable (e.g. .mkv), short-circuit to
+  // 'incompatible' immediately — no point spinning up <video> just to fail.
   useEffect(() => {
-    setPhase('buffering');
-  }, [activeFileIdx]);
+    if (!torrent || activeFileIdx === null) return;
+    const file = torrent.files.find((f) => f.idx === activeFileIdx);
+    if (!file) return;
+    if (!isBrowserPlayable(file.mimeType, file.path)) {
+      setPhase('incompatible');
+    } else {
+      setPhase('buffering');
+    }
+  }, [torrent, activeFileIdx]);
+
+  // Upgrade 'buffering' to 'stalled' after STALL_TIMEOUT_MS so the user sees
+  // a clearer message (and a prominent external-player button) when the swarm
+  // isn't producing data.
+  useEffect(() => {
+    if (phase !== 'buffering') return;
+    const t = setTimeout(() => setPhase('stalled'), STALL_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [phase, activeFileIdx]);
 
   // Auto-stop streaming torrents when leaving the page. Download mode stays
   // running. Files are NOT deleted — partial pieces are kept on disk so the
@@ -503,7 +533,26 @@ function PlaybackOverlay({
   launching: boolean;
   canLaunch: boolean;
 }) {
-  const isError = phase === 'error';
+  const showButton = phase !== 'buffering';
+
+  let eyebrow = 'Подключение к swarm';
+  let body: string | null = `peers: ${peers} · ${formatRate(downloadRate)}`;
+  let showSpinner = true;
+
+  if (phase === 'stalled') {
+    eyebrow = 'Слабый swarm';
+    body = `peers: ${peers} · ${formatRate(downloadRate)} — данные не идут. Открой во внешнем плеере, mpv справляется лучше.`;
+    showSpinner = true;
+  } else if (phase === 'incompatible') {
+    eyebrow = 'Формат не для браузера';
+    body = 'Этот контейнер (mkv/avi/ts) Chromium играть не умеет. Открой во внешнем плеере — mpv/VLC справятся.';
+    showSpinner = false;
+  } else if (phase === 'error') {
+    eyebrow = 'Воспроизведение прервано';
+    body = 'Не удалось загрузить — попробуй внешний плеер или другую раздачу.';
+    showSpinner = false;
+  }
+
   return (
     <div
       className="
@@ -515,45 +564,35 @@ function PlaybackOverlay({
         pointer-events-none
       "
     >
-      {!isError && (
-        <>
-          <Spinner size={28} />
-          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
-            Подключение к swarm
-          </p>
-          <p className="text-bone-50 text-sm tabular-nums">
-            peers: {peers} · {formatRate(downloadRate)}
-          </p>
-        </>
+      {showSpinner && <Spinner size={28} />}
+      <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
+        {eyebrow}
+      </p>
+      {body && (
+        <p className="text-bone-50 text-sm max-w-md tracking-tight">
+          {body}
+        </p>
       )}
-      {isError && (
-        <>
-          <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
-            Воспроизведение прервано
-          </p>
-          <p className="text-bone-50 text-base max-w-md tracking-tight">
-            Не удалось загрузить — попробуй внешний плеер или другую раздачу
-          </p>
-          <button
-            type="button"
-            onClick={onExternal}
-            disabled={launching || !canLaunch}
-            className="
-              focus-ring
-              pointer-events-auto
-              inline-flex items-center justify-center gap-2
-              mt-2 px-6 py-3
-              text-[11px] uppercase tracking-[0.2em] font-medium
-              text-bone-50 bg-ember-400 hover:bg-ember-300
-              disabled:opacity-60 disabled:cursor-not-allowed
-              transition-colors
-            "
-            style={{ borderRadius: 1 }}
-          >
-            {launching ? <Spinner size={12} /> : <ExternalIcon />}
-            <span>Открыть в плеере</span>
-          </button>
-        </>
+      {showButton && (
+        <button
+          type="button"
+          onClick={onExternal}
+          disabled={launching || !canLaunch}
+          className="
+            focus-ring
+            pointer-events-auto
+            inline-flex items-center justify-center gap-2
+            mt-2 px-6 py-3
+            text-[11px] uppercase tracking-[0.2em] font-medium
+            text-bone-50 bg-ember-400 hover:bg-ember-300
+            disabled:opacity-60 disabled:cursor-not-allowed
+            transition-colors
+          "
+          style={{ borderRadius: 1 }}
+        >
+          {launching ? <Spinner size={12} /> : <ExternalIcon />}
+          <span>Открыть в плеере</span>
+        </button>
       )}
     </div>
   );
