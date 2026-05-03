@@ -171,3 +171,26 @@ export async function launchExternal(url: string): Promise<void> {
 export function streamUrl(torrentId: string, fileIdx: number): string {
   return `/api/torrents/${encodeURIComponent(torrentId)}/stream/${fileIdx}`;
 }
+
+// Transcode endpoint pipes the file through ffmpeg server-side, remuxing into
+// fragmented MP4. Use this for containers Chromium can't play natively
+// (mkv/avi/ts/...) when the server reports `capabilities.ffmpeg === true`.
+export function transcodeUrl(torrentId: string, fileIdx: number): string {
+  return `/api/torrents/${encodeURIComponent(torrentId)}/transcode/${fileIdx}`;
+}
+
+export type Capabilities = {
+  ffmpeg: boolean;
+};
+
+export async function getCapabilities(signal?: AbortSignal): Promise<Capabilities> {
+  const res = await fetch('/api/capabilities', { signal });
+  if (!res.ok) {
+    throw new ApiError(`capabilities: ${res.status}`, res.status);
+  }
+  const data: unknown = await res.json();
+  if (data && typeof data === 'object' && 'ffmpeg' in data) {
+    return { ffmpeg: Boolean((data as { ffmpeg: unknown }).ffmpeg) };
+  }
+  return { ffmpeg: false };
+}

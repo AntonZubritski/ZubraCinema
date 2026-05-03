@@ -6,11 +6,13 @@ import {
   getTorrent,
   launchExternal,
   streamUrl,
+  transcodeUrl,
   type TorrentDetail,
 } from '../api';
 import { ProgressBar } from '../components/ProgressBar';
 import { Spinner } from '../components/Spinner';
 import { useToast } from '../lib/toast';
+import { useCapabilities } from '../lib/capabilities';
 import { formatBytes, formatPercent, formatRate } from '../lib/format';
 
 const POLL_MS = 2000;
@@ -18,7 +20,16 @@ const POLL_MS = 2000;
 type Status = 'loading' | 'success' | 'error';
 
 // PlaybackPhase tracks the <video> element's effective state for the overlay.
-type PlaybackPhase = 'buffering' | 'stalled' | 'incompatible' | 'playing' | 'error';
+// `transcoding` is the buffering state when we've routed the file through
+// ffmpeg server-side — visually distinct from plain swarm-buffering so the
+// user can tell why startup is slower than usual.
+type PlaybackPhase =
+  | 'buffering'
+  | 'transcoding'
+  | 'stalled'
+  | 'incompatible'
+  | 'playing'
+  | 'error';
 
 const STALL_TIMEOUT_MS = 15000;
 
@@ -65,6 +76,7 @@ export default function PlayerPage() {
   const [launching, setLaunching] = useState(false);
   const [phase, setPhase] = useState<PlaybackPhase>('buffering');
   const [overlayLaunching, setOverlayLaunching] = useState(false);
+  const caps = useCapabilities();
 
   // Latest torrent reference for the unmount cleanup effect, which only fires
   // when the page is actually torn down (otherwise it would re-fire on every
@@ -144,23 +156,36 @@ export default function PlayerPage() {
     };
   }, [status, torrentId]);
 
-  // Reset playback phase whenever the active file changes. If the file's
-  // container isn't browser-playable (e.g. .mkv), short-circuit to
-  // 'incompatible' immediately — no point spinning up <video> just to fail.
+  // Reset playback phase whenever the active file changes. Decision tree:
+  //   - browser-playable container → plain 'buffering' (waiting on swarm).
+  //   - not playable BUT server has ffmpeg → 'transcoding' (we'll point the
+  //     <video> at the transcode endpoint).
+  //   - not playable AND no ffmpeg → 'incompatible' (route to external).
+  //
+  // We wait for `caps` to resolve before flipping to 'incompatible' so a
+  // brief capabilities-probe delay doesn't flash the wrong overlay.
   useEffect(() => {
     if (!torrent || activeFileIdx === null) return;
     const file = torrent.files.find((f) => f.idx === activeFileIdx);
     if (!file) return;
-    if (!isBrowserPlayable(file.mimeType, file.path)) {
-      setPhase('incompatible');
-    } else {
+    if (isBrowserPlayable(file.mimeType, file.path)) {
       setPhase('buffering');
+      return;
     }
-  }, [torrent, activeFileIdx]);
+    if (caps === null) {
+      // Capabilities still loading — sit in 'buffering' so we don't render a
+      // misleading 'incompatible' message that vanishes a tick later.
+      setPhase('buffering');
+      return;
+    }
+    setPhase(caps.ffmpeg ? 'transcoding' : 'incompatible');
+  }, [torrent, activeFileIdx, caps]);
 
   // Upgrade 'buffering' to 'stalled' after STALL_TIMEOUT_MS so the user sees
   // a clearer message (and a prominent external-player button) when the swarm
-  // isn't producing data.
+  // isn't producing data. Transcoding intentionally has no stall timeout —
+  // ffmpeg startup latency on slow swarms is normal and the overlay already
+  // explains what's happening.
   useEffect(() => {
     if (phase !== 'buffering') return;
     const t = setTimeout(() => setPhase('stalled'), STALL_TIMEOUT_MS);
@@ -248,8 +273,34 @@ export default function PlayerPage() {
     }
   }, [navigate, showToast, stopping, torrentId]);
 
-  const videoSrc =
-    activeFileIdx !== null ? streamUrl(torrentId, activeFileIdx) : '';
+  // playbackUrl picks between the raw stream and the ffmpeg transcode pipe.
+  //   - playable container → /stream/  (range-supported, seek works)
+  //   - non-playable + ffmpeg available → /transcode/  (no seek, no length)
+  //   - non-playable + no ffmpeg → '' (don't render <video>; overlay handles
+  //     the route-to-external UX)
+  // Returning '' for the no-ffmpeg case keeps the <video> element unmounted
+  // so it can't latch onto a stale src and emit a confusing 'error' event.
+  const playbackUrl = useMemo<string>(() => {
+    if (!torrent || activeFileIdx === null) return '';
+    const file = torrent.files.find((f) => f.idx === activeFileIdx);
+    if (!file) return '';
+    if (isBrowserPlayable(file.mimeType, file.path)) {
+      return streamUrl(torrentId, activeFileIdx);
+    }
+    if (caps?.ffmpeg) {
+      return transcodeUrl(torrentId, activeFileIdx);
+    }
+    return '';
+  }, [torrent, activeFileIdx, torrentId, caps]);
+
+  // Whether the current playback URL is going through ffmpeg. Used to gate
+  // overlay copy and the 'transcoding' phase.
+  const isTranscoding = useMemo<boolean>(() => {
+    if (!torrent || activeFileIdx === null) return false;
+    const file = torrent.files.find((f) => f.idx === activeFileIdx);
+    if (!file) return false;
+    return !isBrowserPlayable(file.mimeType, file.path) && Boolean(caps?.ffmpeg);
+  }, [torrent, activeFileIdx, caps]);
 
   return (
     <div className="grain vignette min-h-screen relative">
@@ -288,18 +339,20 @@ export default function PlayerPage() {
                 className="relative bg-black ring-1 ring-ember-300/40 overflow-hidden"
                 style={{ borderRadius: 2 }}
               >
-                <video
-                  key={videoSrc}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  autoPlay
-                  muted
-                  src={videoSrc}
-                  className="w-full h-auto block max-h-[calc(100vh-160px)]"
-                  onPlaying={() => setPhase('playing')}
-                  onError={() => setPhase('error')}
-                />
+                {playbackUrl && (
+                  <video
+                    key={playbackUrl}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    autoPlay
+                    muted
+                    src={playbackUrl}
+                    className="w-full h-auto block max-h-[calc(100vh-160px)]"
+                    onPlaying={() => setPhase('playing')}
+                    onError={() => setPhase('error')}
+                  />
+                )}
                 {phase !== 'playing' && (
                   <PlaybackOverlay
                     phase={phase}
@@ -308,6 +361,7 @@ export default function PlayerPage() {
                     onExternal={handleOverlayExternal}
                     launching={overlayLaunching}
                     canLaunch={activeFileIdx !== null}
+                    transcoding={isTranscoding}
                   />
                 )}
               </div>
@@ -525,6 +579,7 @@ function PlaybackOverlay({
   onExternal,
   launching,
   canLaunch,
+  transcoding,
 }: {
   phase: PlaybackPhase;
   peers: number;
@@ -532,14 +587,26 @@ function PlaybackOverlay({
   onExternal: () => void;
   launching: boolean;
   canLaunch: boolean;
+  transcoding: boolean;
 }) {
-  const showButton = phase !== 'buffering';
+  // While buffering or transcoding we hide the external-player button — the
+  // user is in the happy path and we don't want to nudge them off it.
+  const showButton = phase !== 'buffering' && phase !== 'transcoding';
 
   let eyebrow = 'Подключение к swarm';
   let body: string | null = `peers: ${peers} · ${formatRate(downloadRate)}`;
   let showSpinner = true;
+  // 'ENCODING' label is the only differentiator from plain swarm-buffering;
+  // visually it sits above the eyebrow as a small monogram so users notice
+  // their setup is doing extra work and don't blame the swarm for slowness.
+  let badge: string | null = null;
 
-  if (phase === 'stalled') {
+  if (phase === 'transcoding') {
+    badge = 'ENCODING';
+    eyebrow = 'Транскодинг через ffmpeg';
+    body = `peers: ${peers} · ${formatRate(downloadRate)} — ремуксим контейнер на лету, секунд 5-15 на старт.`;
+    showSpinner = true;
+  } else if (phase === 'stalled') {
     eyebrow = 'Слабый swarm';
     body = `peers: ${peers} · ${formatRate(downloadRate)} — данные не идут. Открой во внешнем плеере, mpv справляется лучше.`;
     showSpinner = true;
@@ -548,8 +615,12 @@ function PlaybackOverlay({
     body = 'Этот контейнер (mkv/avi/ts) Chromium играть не умеет. Открой во внешнем плеере — mpv/VLC справятся.';
     showSpinner = false;
   } else if (phase === 'error') {
-    eyebrow = 'Воспроизведение прервано';
-    body = 'Не удалось загрузить — попробуй внешний плеер или другую раздачу.';
+    eyebrow = transcoding
+      ? 'Транскодинг сорвался'
+      : 'Воспроизведение прервано';
+    body = transcoding
+      ? 'ffmpeg не смог обработать этот файл (редкий кодек?). Открой во внешнем плеере.'
+      : 'Не удалось загрузить — попробуй внешний плеер или другую раздачу.';
     showSpinner = false;
   }
 
@@ -565,6 +636,11 @@ function PlaybackOverlay({
       "
     >
       {showSpinner && <Spinner size={28} />}
+      {badge && (
+        <p className="text-[9px] uppercase tracking-[0.35em] font-medium text-ember-200 bg-ember-400/10 border border-ember-300/40 px-2 py-0.5">
+          {badge}
+        </p>
+      )}
       <p className="text-[11px] uppercase tracking-[0.25em] text-ember-300/80">
         {eyebrow}
       </p>

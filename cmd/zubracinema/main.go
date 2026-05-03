@@ -26,6 +26,7 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/torrentscsv"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/yts"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
+	"github.com/AntonZubritski/ZubraCinema/internal/transcode"
 )
 
 const (
@@ -94,6 +95,13 @@ func main() {
 	)
 	agg := sources.NewAggregator(srcs...)
 
+	tc := transcode.New()
+	if tc.Available() {
+		log.Printf("ffmpeg available at %s — in-browser transcode enabled", tc.Path())
+	} else {
+		log.Printf("ffmpeg not in PATH — incompatible files will require external player")
+	}
+
 	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
 	srv := &http.Server{
 		Addr: addr,
@@ -101,6 +109,7 @@ func main() {
 			Manager:    mgr,
 			Aggregator: agg,
 			Rutor:      rutorSrc,
+			Transcoder: tc,
 		}),
 	}
 

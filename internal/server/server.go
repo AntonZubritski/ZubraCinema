@@ -11,6 +11,7 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
+	"github.com/AntonZubritski/ZubraCinema/internal/transcode"
 	webroot "github.com/AntonZubritski/ZubraCinema/web"
 )
 
@@ -18,6 +19,7 @@ type Deps struct {
 	Manager    *ztorrent.Manager
 	Aggregator *sources.Aggregator
 	Rutor      *rutor.Source
+	Transcoder *transcode.Transcoder
 }
 
 func New(d Deps) http.Handler {
@@ -37,6 +39,13 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/torrents/{id}", handleGetTorrent(d.Manager))
 	mux.HandleFunc("DELETE /api/torrents/{id}", handleDeleteTorrent(d.Manager))
 	mux.HandleFunc("GET /api/torrents/{id}/stream/{fileIdx}", ztorrent.StreamHandler(d.Manager))
+
+	// On-the-fly remux to fragmented MP4 for containers Chromium won't play
+	// (mkv/avi/ts/...). Falls back to 503 if ffmpeg isn't installed.
+	if d.Transcoder != nil {
+		mux.HandleFunc("GET /api/torrents/{id}/transcode/{fileIdx}", handleTranscode(d.Manager, d.Transcoder))
+		mux.HandleFunc("GET /api/capabilities", handleCapabilities(d.Transcoder))
+	}
 
 	// Launcher (open URL in default app)
 	mux.HandleFunc("POST /api/launch", handleLaunch())
