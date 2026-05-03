@@ -179,7 +179,9 @@ func (s *Source) FetchPoster(ctx context.Context, detailURL string) (string, err
 		return "", err
 	}
 
-	// Search descriptive area first.
+	// Two-pass scan over the description area:
+	//   1) prefer images hosted on well-known poster CDNs (imageban, fastpic, etc.)
+	//   2) fall back to first non-chrome image with reasonable aspect ratio
 	scopes := []*goquery.Selection{
 		doc.Find("#index"),
 		doc.Find(".index2"),
@@ -190,39 +192,96 @@ func (s *Source) FetchPoster(ctx context.Context, detailURL string) (string, err
 		if sc == nil || sc.Length() == 0 {
 			continue
 		}
-		var found string
-		sc.Find("img").EachWithBreak(func(_ int, img *goquery.Selection) bool {
-			src, ok := img.Attr("src")
-			if !ok {
-				return true
-			}
-			src = strings.TrimSpace(src)
-			if src == "" || strings.HasPrefix(src, "data:") {
-				return true
-			}
-			low := strings.ToLower(src)
-			// Skip tracker chrome, tiny icons, and known ad/placeholder hosts.
-			if strings.Contains(low, "smile") || strings.Contains(low, "icon") ||
-				strings.Contains(low, "logo") || strings.Contains(low, "rating") ||
-				strings.Contains(low, "cdnbunny") || strings.Contains(low, "smartadserver") ||
-				strings.Contains(low, "/ad/") || strings.Contains(low, "banner") ||
-				strings.Contains(low, "/m.png") || strings.Contains(low, "spacer") ||
-				strings.HasSuffix(low, ".gif") {
-				return true
-			}
-			if strings.HasPrefix(src, "//") {
-				src = "http:" + src
-			} else if strings.HasPrefix(src, "/") {
-				src = baseURL + src
-			}
-			found = src
-			return false
-		})
-		if found != "" {
-			return found, nil
+		if hit := scanPosterImgs(sc, true); hit != "" {
+			return hit, nil
+		}
+	}
+	for _, sc := range scopes {
+		if sc == nil || sc.Length() == 0 {
+			continue
+		}
+		if hit := scanPosterImgs(sc, false); hit != "" {
+			return hit, nil
 		}
 	}
 	return "", nil
+}
+
+// preferredHosts are common image hosts where rutor posters live.
+var preferredHosts = []string{
+	"imageban", "fastpic", "lostpic", "imgur", "ibb.co",
+	"postimg", "imgbb", "kinopoisk", "ipic.su", "i.imgur",
+	"radikal", "pic2.me", "imgshare",
+}
+
+// rejectHints are url substrings that mean "not a poster".
+var rejectHints = []string{
+	"smile", "icon", "logo", "rating", "cdnbunny", "smartadserver",
+	"/ad/", "banner", "/m.png", "spacer", "rutor.info/i/",
+	"rutor.org/i/", "favicon", "button", "arrow",
+}
+
+func scanPosterImgs(sc *goquery.Selection, preferredOnly bool) string {
+	var found string
+	sc.Find("img").EachWithBreak(func(_ int, img *goquery.Selection) bool {
+		src, ok := img.Attr("src")
+		if !ok {
+			return true
+		}
+		src = strings.TrimSpace(src)
+		if src == "" || strings.HasPrefix(src, "data:") {
+			return true
+		}
+		low := strings.ToLower(src)
+		for _, hint := range rejectHints {
+			if strings.Contains(low, hint) {
+				return true
+			}
+		}
+		if strings.HasSuffix(low, ".gif") {
+			return true
+		}
+		// Skip clearly non-poster aspect ratios when width/height are present.
+		if w, h, ok := imgDims(img); ok {
+			if w > 0 && h > 0 {
+				// Posters are taller than wide (~2:3). Skip clearly landscape.
+				if w*2 > h*3 || w < 100 || h < 150 {
+					return true
+				}
+			}
+		}
+		if preferredOnly {
+			match := false
+			for _, host := range preferredHosts {
+				if strings.Contains(low, host) {
+					match = true
+					break
+				}
+			}
+			if !match {
+				return true
+			}
+		}
+		if strings.HasPrefix(src, "//") {
+			src = "http:" + src
+		} else if strings.HasPrefix(src, "/") {
+			src = baseURL + src
+		}
+		found = src
+		return false
+	})
+	return found
+}
+
+func imgDims(img *goquery.Selection) (w, h int, ok bool) {
+	ws, _ := img.Attr("width")
+	hs, _ := img.Attr("height")
+	if ws == "" && hs == "" {
+		return 0, 0, false
+	}
+	w, _ = strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(ws), "px"))
+	h, _ = strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(hs), "px"))
+	return w, h, true
 }
 
 func stripNonDigits(s string) string {
