@@ -23,7 +23,17 @@ export function MovieGrid({ groups, onSelect }: Props) {
         <div
           key={g.id}
           className="animate-rise-in"
-          style={{ animationDelay: `${Math.min(i, 12) * 30}ms`, animationFillMode: 'backwards' }}
+          style={{
+            animationDelay: `${Math.min(i, 12) * 30}ms`,
+            animationFillMode: 'backwards',
+            // Browser-level virtualisation: off-screen cards skip layout +
+            // paint until they scroll into view. The intrinsic-size hint is
+            // a rough estimate (poster aspect 2:3 at typical column width
+            // + title block) so the scrollbar stays accurate before the
+            // browser has measured each card.
+            contentVisibility: 'auto',
+            containIntrinsicSize: 'auto 400px',
+          }}
         >
           <MovieCard group={g} onClick={() => onSelect(g)} />
         </div>

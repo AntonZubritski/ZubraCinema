@@ -20,3 +20,9 @@ web/dist/*
 *.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+
+# Dev-only screenshots and Playwright probe artefacts
+.playwright-mcp/
+/*.png
+/web/posters-fixed.png
+

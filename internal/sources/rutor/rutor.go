@@ -2,6 +2,7 @@ package rutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -66,12 +67,55 @@ func (s *Source) fetchDoc(ctx context.Context, u string) (*goquery.Document, err
 	return goquery.NewDocumentFromReader(resp.Body)
 }
 
-// BrowseLatest fetches rutor's "Movies HD" category (first page) and parses
-// it the same way as a search result page. Used by the featured endpoint.
+// BrowseLatest fetches rutor's "Зарубежные сериалы" category (cat id 4,
+// page 0) and parses it the same way as a search result page. Kept around
+// as the engine for the legacy /api/featured endpoint.
 func (s *Source) BrowseLatest(ctx context.Context) ([]sources.Torrent, error) {
 	doc, err := s.fetchDoc(ctx, baseURL+"/browse/0/4/000/0")
 	if err != nil {
 		return nil, err
+	}
+	return parseRows(doc), nil
+}
+
+// BrowseCategory fetches one page of torrents from a rutor category. catID
+// must be the numeric category id ("1" = Зарубежные фильмы, etc.) — see
+// internal/categories for the canonical mapping. page is 0-indexed; rutor's
+// URL scheme uses 0 for the first page.
+func (s *Source) BrowseCategory(ctx context.Context, catID string, page int) ([]sources.Torrent, error) {
+	if catID == "" {
+		return nil, errors.New("rutor: empty catID")
+	}
+	if page < 0 {
+		page = 0
+	}
+	// catID is trusted (validated upstream) but we still pass it through
+	// url.PathEscape for defence in depth.
+	u := fmt.Sprintf("%s/browse/%d/%s/000/0", baseURL, page, url.PathEscape(catID))
+	doc, err := s.fetchDoc(ctx, u)
+	if err != nil {
+		return nil, fmt.Errorf("rutor browse: %w", err)
+	}
+	return parseRows(doc), nil
+}
+
+// BrowseTag fetches torrents tagged with a specific genre under a rutor
+// category. The URL is /tag/{catID}/{cyrillic-label} — note that rutor's
+// tag listings DON'T paginate, so the response is the latest ~27 entries
+// regardless of how many torrents exist. tagLabel must match rutor's
+// taxonomy verbatim (including any trailing `*` for prefix-match tags
+// like "Биограф*"). Empty tagLabel falls back to the full category browse.
+func (s *Source) BrowseTag(ctx context.Context, catID, tagLabel string) ([]sources.Torrent, error) {
+	if catID == "" {
+		return nil, errors.New("rutor: empty catID")
+	}
+	if tagLabel == "" {
+		return s.BrowseCategory(ctx, catID, 0)
+	}
+	u := fmt.Sprintf("%s/tag/%s/%s", baseURL, url.PathEscape(catID), url.PathEscape(tagLabel))
+	doc, err := s.fetchDoc(ctx, u)
+	if err != nil {
+		return nil, fmt.Errorf("rutor tag: %w", err)
 	}
 	return parseRows(doc), nil
 }

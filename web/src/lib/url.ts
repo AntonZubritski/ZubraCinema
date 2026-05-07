@@ -6,6 +6,11 @@ export type ViewState = {
   sort: SortKey;
   langs: Language[];
   qualities: QualityBucket[];
+  /** Empty string / undefined = "Везде" (global /api/search). Non-empty =
+   *  a category slug from CATEGORIES — search is restricted to that
+   *  category and filtered client-side by `q`. Optional so consumers
+   *  that don't care (e.g. CategoryPage) don't have to thread it. */
+  scope?: string;
 };
 
 const SORT_KEYS: SortKey[] = ['relevance', 'seeders', 'size', 'title', 'year'];
@@ -15,6 +20,7 @@ export const DEFAULT_STATE: ViewState = {
   sort: 'relevance',
   langs: [...ALL_LANGUAGES],
   qualities: [...ALL_QUALITIES],
+  scope: '',
 };
 
 function parseList<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
@@ -39,6 +45,7 @@ export function parseState(params: URLSearchParams): ViewState {
     sort,
     langs: parseList(params.get('lang'), ALL_LANGUAGES),
     qualities: parseList(params.get('quality'), ALL_QUALITIES),
+    scope: params.get('scope') ?? '',
   };
 }
 
@@ -59,5 +66,6 @@ export function serializeState(state: ViewState): URLSearchParams {
   if (!listEqualsAll(state.qualities, ALL_QUALITIES)) {
     out.set('quality', state.qualities.join(','));
   }
+  if (state.scope && state.scope.length > 0) out.set('scope', state.scope);
   return out;
 }

@@ -1,0 +1,148 @@
+# Cross-builds the ZubraCinema Go binary for 5 platform/arch combos and
+# attaches them to a GitHub Release whenever a `v*` tag is pushed.
+#
+# Why a single ubuntu-latest runner instead of a matrix of OS runners?
+#   The Go code has no cgo dependencies (modernc.org/sqlite is pure Go),
+#   so cross-compilation from Linux is trivial — we just flip GOOS/GOARCH.
+#   This is much faster (one runner warm-up, one web build) and avoids
+#   shipping different builds of `web/dist/` from different Node minor versions.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'          # v0.9.0, v1.0.0-beta, etc.
+  workflow_dispatch:  # manual "Run workflow" button — handy for testing the pipeline
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    # `contents: write` is required for softprops/action-gh-release to create
+    # the Release and upload assets via the GITHUB_TOKEN.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- Toolchains ------------------------------------------------------
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # Built-in cache for ~/.npm, keyed off web/package-lock.json.
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          # actions/setup-go caches the Go module + build cache by default.
+          cache: true
+
+      # ---- Build the SPA first --------------------------------------------
+      # The Go binary uses `go:embed` to bundle web/dist/, so the SPA MUST
+      # exist on disk before `go build` runs.
+      - name: Build web SPA
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      # ---- Cross-compile Go binaries --------------------------------------
+      # CGO_ENABLED=0 forces a fully static build — no glibc version skew on
+      # the user's Linux box, no MinGW dance for Windows. Possible only because
+      # the project has no cgo deps.
+      #
+      # -ldflags "-s -w" strips DWARF debug info + symbol table, shaving ~25%
+      # off the binary size. Safe for a desktop app where we don't need
+      # backtraces from user reports.
+      #
+      # -trimpath removes absolute paths from the binary (reproducible builds,
+      # smaller size, less leaked info).
+      - name: Cross-compile binaries
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w"
+          PKG="./cmd/zubracinema"
+
+          echo "==> windows/amd64"
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/zubracinema-windows-amd64.exe "$PKG"
+
+          echo "==> darwin/amd64 (Intel Mac)"
+          GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/zubracinema-macos-intel "$PKG"
+
+          echo "==> darwin/arm64 (Apple Silicon)"
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/zubracinema-macos-arm64 "$PKG"
+
+          echo "==> linux/amd64"
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/zubracinema-linux-amd64 "$PKG"
+
+          echo "==> linux/arm64 (Raspberry Pi 4/5, ARM servers)"
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/zubracinema-linux-arm64 "$PKG"
+
+          ls -lh dist/
+
+      # ---- Publish the GitHub Release -------------------------------------
+      # softprops/action-gh-release@v2 is the de-facto standard for this in
+      # 2025+. With `tag_name: ${{ github.ref_name }}` it creates (or updates)
+      # a Release pinned to the pushed tag and uploads every file in `files:`.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ZubraCinema ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          # generate_release_notes: true would auto-fill from PRs/commits,
+          # but we provide a manual body in Russian for friends. Set to true
+          # if you want GitHub's auto-generated changelog appended.
+          generate_release_notes: false
+          body: |
+            ## ZubraCinema ${{ github.ref_name }}
+
+            Скачайте бинарь под свою ОС и запустите. Установка не требуется.
+
+            | ОС | Файл |
+            |---|---|
+            | Windows (64-bit) | `zubracinema-windows-amd64.exe` |
+            | macOS (Intel) | `zubracinema-macos-intel` |
+            | macOS (Apple Silicon, M1/M2/M3) | `zubracinema-macos-arm64` |
+            | Linux (x86_64) | `zubracinema-linux-amd64` |
+            | Linux (ARM64 / Raspberry Pi 4/5) | `zubracinema-linux-arm64` |
+
+            ### Запуск
+
+            **Windows:** двойной клик. Если Defender SmartScreen ругается — «Подробнее» → «Выполнить в любом случае» (бинарь не подписан).
+
+            **macOS:** в терминале сделайте файл исполняемым и снимите карантин:
+            ```sh
+            chmod +x zubracinema-macos-arm64
+            xattr -d com.apple.quarantine zubracinema-macos-arm64
+            ./zubracinema-macos-arm64
+            ```
+
+            **Linux:**
+            ```sh
+            chmod +x zubracinema-linux-amd64
+            ./zubracinema-linux-amd64
+            ```
+
+            После запуска откроется браузер на `http://localhost:7777`.
+          files: |
+            dist/zubracinema-windows-amd64.exe
+            dist/zubracinema-macos-intel
+            dist/zubracinema-macos-arm64
+            dist/zubracinema-linux-amd64
+            dist/zubracinema-linux-arm64

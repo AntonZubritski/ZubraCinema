@@ -34,7 +34,7 @@ export function SearchBar({ value, onChange, onSubmit, loading }: Props) {
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Search a film, a year, a director…"
+        placeholder="Поиск фильма, года, режиссёра…"
         spellCheck={false}
         autoComplete="off"
         className="
@@ -43,14 +43,14 @@ export function SearchBar({ value, onChange, onSubmit, loading }: Props) {
           bg-ink-900/70 backdrop-blur-md
           border border-ink-700/80
           text-bone-50 placeholder:text-bone-300/40
-          text-lg font-light tracking-tight
+          text-lg tracking-tight
           pl-14 pr-32 py-5
           transition-colors
           hover:border-ink-600
           focus:border-ember-300/40
           focus:bg-ink-900
         "
-        style={{ borderRadius: 2 }}
+        style={{ borderRadius: 14 }}
       />
 
       <button
@@ -60,16 +60,16 @@ export function SearchBar({ value, onChange, onSubmit, loading }: Props) {
           focus-ring
           absolute inset-y-2 right-2
           px-6
-          text-xs uppercase tracking-[0.18em] font-medium
+          text-xs uppercase tracking-[0.18em] font-semibold
           text-bone-50
           bg-ember-400 hover:bg-ember-300
           disabled:bg-ink-700 disabled:text-bone-300/40
           transition-colors
           flex items-center
         "
-        style={{ borderRadius: 1 }}
+        style={{ borderRadius: 10 }}
       >
-        {loading ? 'Searching' : 'Search'}
+        {loading ? 'Ищем…' : 'Найти'}
       </button>
     </form>
   );

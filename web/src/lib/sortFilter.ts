@@ -1,5 +1,6 @@
 import type { Group, GroupTorrent } from '../api';
 import { languageScore, normalizeLanguage, type Language } from './lang';
+import { streamabilityOf, streamabilityScore } from './quality';
 
 export type SortKey = 'relevance' | 'seeders' | 'size' | 'title' | 'year';
 
@@ -66,6 +67,11 @@ export function sortGroups(groups: Group[], sortKey: SortKey): Group[] {
   switch (sortKey) {
     case 'relevance':
       arr.sort((a, b) => {
+        // Streamability tier wins first — green > yellow > red. The user
+        // wants playable releases at the top, dead ones at the bottom.
+        const sa = streamabilityScore(streamabilityOf(a));
+        const sb = streamabilityScore(streamabilityOf(b));
+        if (sa !== sb) return sb - sa;
         const ls = languageScore(topTorrentLanguage(b)) - languageScore(topTorrentLanguage(a));
         if (ls !== 0) return ls;
         return totalSeeders(b) - totalSeeders(a);

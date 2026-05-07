@@ -11,18 +11,30 @@
     height: 100%;
   }
 
+  /* Reserve scrollbar gutter so layout doesn't jump when overflow toggles
+     (sidebar open / settings modal / install panel). Modern Chromium +
+     Firefox; older browsers degrade to "scrollbar overlays content"
+     which is fine. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
   body {
     @apply bg-ink-950 text-bone-100 font-sans antialiased;
     font-feature-settings: 'ss01', 'cv11';
+    /* Herbal-green vignette at the top with a faint warm earth glow at
+       the bottom-right. The green is intentionally subtle — a tint over
+       the dark canvas, not a wash — so posters keep their colour while
+       the chrome reads as the rest of the green palette. */
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(217, 74, 31, 0.08), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 110%, rgba(217, 74, 31, 0.04), transparent 60%);
+      radial-gradient(ellipse 90% 55% at 50% -8%, rgba(90, 149, 59, 0.10), transparent 65%),
+      radial-gradient(ellipse 70% 45% at 100% 105%, rgba(163, 114, 70, 0.05), transparent 65%);
     background-attachment: fixed;
   }
 
   ::selection {
-    background-color: rgba(217, 74, 31, 0.35);
-    color: #f5f1ea;
+    background-color: rgba(90, 149, 59, 0.4);
+    color: #f6f4ee;
   }
 }
 
@@ -50,9 +62,9 @@
   .skeleton-shimmer {
     background: linear-gradient(
       90deg,
-      rgba(31, 29, 37, 0.6) 0%,
-      rgba(58, 55, 68, 0.7) 50%,
-      rgba(31, 29, 37, 0.6) 100%
+      rgba(29, 32, 41, 0.6) 0%,
+      rgba(54, 58, 72, 0.7) 50%,
+      rgba(29, 32, 41, 0.6) 100%
     );
     background-size: 800px 100%;
     @apply animate-shimmer;
@@ -61,4 +73,17 @@
   .focus-ring {
     @apply focus:outline-none focus-visible:ring-1 focus-visible:ring-ember-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950;
   }
+}
+
+/* Hide the native HTML5 video timeline + time display. The transcoded
+   stream is forward-only, so what the browser thinks is the duration is
+   only the bytes streamed so far — clicking the native bar lands at a
+   nonsensical time. We render our own SeekBar below the player that uses
+   the ffprobe duration and re-spawns ffmpeg at the seek target.
+   Chromium-only selectors; Firefox/Safari keep their default controls. */
+video::-webkit-media-controls-timeline,
+video::-webkit-media-controls-current-time-display,
+video::-webkit-media-controls-time-remaining-display,
+video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
 }

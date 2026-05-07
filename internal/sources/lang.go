@@ -11,6 +11,10 @@ var (
 	multiAudioHintRe = regexp.MustCompile(`(?i)\b(dub|dubbed|dualaudio|dual\s?audio)\b`)
 
 	ukrTokenRe = regexp.MustCompile(`(?i)(укр|ukrainian|українськ|\bUKR\b|(?:^|[\s\W])UA(?:[\s\W\-]|$))`)
+	// Polish detection: explicit POL tag, "Polish" word, "PL" boundary
+	// (avoiding false positives on "Player", "Plus", etc. by requiring
+	// non-word boundaries on both sides), and Polish-only diacritics.
+	polTokenRe = regexp.MustCompile(`(?i)(\bPOL\b|polish|polski|polska|polskie|lektor|napisy\s+pl|dubbing\s+pl|(?:^|[\s\W])PL(?:[\s\W\-]|$))`)
 
 	ruMarkerRe = regexp.MustCompile(`(?i)(MVO|DVO|AVO|Дубляж|Многоголос|Одноголос|Двухголос|Озвучка|Перевод|Лицензия|Русский|на\s+русском|\bRUS\b|\bRU\b|\|\s?D\b|\|\s?L\b|\|\s?P\b|\|\s?A\b|\|\s?2x\b|\|\s?MVO\b|\|\s?DVO\b|\|\s?AVO\b|от\s+[A-ZА-Я])`)
 
@@ -18,7 +22,7 @@ var (
 )
 
 // DetectLanguage classifies a torrent title into one of:
-// "ru", "uk", "en", "multi", "other".
+// "ru", "uk", "pl", "en", "multi", "other".
 //
 // Apply the raw (uncleaned) title for richer signal.
 func DetectLanguage(title string) string {
@@ -45,12 +49,21 @@ func DetectLanguage(title string) string {
 		}
 	}
 
-	// 2. uk
+	// 2. uk — Ukrainian markers win over Russian even when Cyrillic is
+	// present, since Ukrainian releases often include Russian-language
+	// metadata too.
 	if ukrTokenRe.MatchString(title) {
 		return "uk"
 	}
 
-	// 3. ru — any Cyrillic letters in a torrent title from a RU tracker is
+	// 3. pl — Polish lektor/dubbing/napisy markers; checked before the
+	// Cyrillic catch-all because some Polish releases contain Cyrillic
+	// in the original-name section but are clearly PL releases.
+	if polTokenRe.MatchString(title) {
+		return "pl"
+	}
+
+	// 4. ru — any Cyrillic letters in a torrent title from a RU tracker is
 	// effectively always a Russian release (rip with RU dub, RU original, etc.).
 	// Explicit MVO/DVO/AVO/etc. markers also trigger RU.
 	if hasCyr {
@@ -60,12 +73,12 @@ func DetectLanguage(title string) string {
 		return "ru"
 	}
 
-	// 4. en
+	// 5. en
 	if mostlyLatin(title) {
 		return "en"
 	}
 
-	// 5. fallback
+	// 6. fallback
 	return "other"
 }
 
