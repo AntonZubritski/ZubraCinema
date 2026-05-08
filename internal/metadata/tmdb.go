@@ -56,7 +56,7 @@ var ErrNotFound = errors.New("metadata: not found")
 
 const (
 	apiBase      = "https://api.themoviedb.org/3"
-	imgPosterURL = "https://image.tmdb.org/t/p/w500"
+	imgPosterURL = "https://image.tmdb.org/t/p/w780"
 	imgBackdrop  = "https://image.tmdb.org/t/p/original"
 	imgProfile   = "https://image.tmdb.org/t/p/w185"
 )

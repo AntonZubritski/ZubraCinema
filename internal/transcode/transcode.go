@@ -194,21 +194,28 @@ func (t *Transcoder) StreamRange(ctx context.Context, inputURL string, startSec 
 		// nobody complains about.
 		"-c:a", "aac",
 		"-b:a", "192k",
-		// A/V sync. Input-seek (-ss before -i) drops samples ahead of the
-		// requested time, but the audio decoder still has its own pre-roll
-		// buffer that ends up offset from the video PTS. The combination
-		// below is what fixes "video plays for ~0.5s before audio arrives"
-		// after switching tracks:
-		//   -af aresample=async=1000 — pad/drop up to 1000 samples to lock
-		//     audio PTS onto the video clock at the start of the stream.
-		//   -fps_mode cfr — emit a constant-rate video so the muxer sees
-		//     monotonic, predictable video timestamps.
-		//   -avoid_negative_ts make_zero — after -ss, the first packet
-		//     often has a negative PTS; shifting both streams to zero
-		//     keeps the muxer happy and the browser's <video> from
-		//     rejecting the initial fragment.
-		"-af", "aresample=async=1000",
-		"-fps_mode", "cfr",
+		// A/V sync. Two distinct problems we have to handle:
+		//
+		//   (a) Initial offset after `-ss` input-seek: the audio decoder's
+		//       pre-roll buffer can land slightly behind/ahead of the
+		//       seeked video PTS, producing a constant 50-300ms gap.
+		//   (b) Slow continuous drift over 5+ minutes: the source's
+		//       audio sample rate doesn't perfectly match the muxer's
+		//       output PTS clock, so audio and video gradually decouple.
+		//
+		// `aresample=async=1` keeps re-stretching the audio by up to 1
+		// sample/sec to track the video clock for the entire stream. The
+		// older `async=1000` only did a one-shot correction at the start,
+		// which fixed (a) but let (b) drift unbounded — the user-reported
+		// "звук теперь быстрее чем картинка". `-avoid_negative_ts
+		// make_zero` keeps the first fragment's PTS non-negative so the
+		// browser's MSE accepts it.
+		//
+		// We deliberately don't pass `-fps_mode` here: it's a no-op when
+		// `-c:v copy` is in effect (we don't re-encode video, so output
+		// PTS comes straight from source), and on the re-encode branch
+		// libx264's default fps handling is fine.
+		"-af", "aresample=async=1",
 		"-avoid_negative_ts", "make_zero",
 		// Fragmented MP4 flags: emit a moov atom up front (empty_moov),
 		// produce keyframe-aligned fragments (frag_keyframe), and use

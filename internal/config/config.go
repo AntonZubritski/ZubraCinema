@@ -25,6 +25,18 @@ type Config struct {
 	// page hides adult categories and the corresponding sources don't
 	// appear in search results. Set via the Settings UI.
 	Adult bool `json:"adult,omitempty"`
+	// LANAccess switches the HTTP server bind from `localhost:7777` to
+	// `0.0.0.0:7777`, making ZubraCinema reachable from other devices on
+	// the local network — primarily TVs (Tizen / WebOS / Android TV)
+	// browsing via their built-in browser. Off by default for the safer
+	// local-only experience. Requires app restart to take effect — the
+	// http.Server is bound at startup.
+	LANAccess bool `json:"lanAccess,omitempty"`
+	// TVMode tweaks the SPA for TV / D-pad navigation: bigger focus
+	// rings, larger fonts on the home grid, conservative `<video
+	// preload>` to keep the on-TV memory footprint small. The frontend
+	// reads it at runtime, so toggling does NOT require a restart.
+	TVMode bool `json:"tvMode,omitempty"`
 }
 
 // DefaultPath returns the canonical config-file location for the running

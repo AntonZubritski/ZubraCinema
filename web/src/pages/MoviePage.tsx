@@ -130,7 +130,7 @@ export default function MoviePage() {
       if (busy) return;
       setBusy({ id: torrent.id, mode });
       try {
-        const session = await startTorrent(torrent.magnet, mode);
+        const session = await startTorrent(torrent, mode);
         if (mode === 'stream') {
           // Pass an `adult` hint so the player can start muted on 18+
           // content (avoids surprising loud audio in public). Detected
@@ -170,7 +170,7 @@ export default function MoviePage() {
         onClose={() => setShowSidebar(false)}
         adultEnabled={adultEnabled}
       />
-      <div className="relative z-10 max-w-[1500px] mx-auto px-8 lg:px-14 pt-4 pb-24">
+      <div className="relative z-10 max-w-[1500px] mx-auto px-5 lg:px-14 pt-4 pb-24">
         {group ? (
           <GroupView group={group} busy={busy} onPick={handlePick} showToast={showToast} />
         ) : (
@@ -367,9 +367,16 @@ function GroupView({
       <div className="mt-10 md:mt-14">
         {/* ── TWO-COLUMN HERO ────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)] gap-8 md:gap-12">
-          {/* LEFT: poster */}
-          <div className="md:sticky md:top-20 self-start">
-            <Poster posterUrl={group.posterUrl} title={group.title} />
+          {/* LEFT: poster. On mobile we cap the width so a tiny rutor
+              thumbnail can't be blown up across the whole viewport. The
+              TMDB poster (w780) is preferred when available — it's the
+              same logical asset but at a resolution that survives mobile
+              retina (3x) scaling. */}
+          <div className="md:sticky md:top-20 self-start mx-auto md:mx-0 w-[240px] sm:w-[280px] md:w-auto">
+            <Poster
+              posterUrl={(metadata?.posterUrl ?? '') || group.posterUrl}
+              title={group.title}
+            />
           </div>
 
           {/* RIGHT: meta column */}
@@ -382,7 +389,7 @@ function GroupView({
             )}
 
             {/* Title */}
-            <h1 className="text-5xl md:text-6xl font-bold text-bone-50 leading-[1.02] tracking-tight break-words line-clamp-2">
+            <h1 className="text-3xl sm:text-4xl md:text-6xl font-bold text-bone-50 leading-[1.05] md:leading-[1.02] tracking-tight break-words line-clamp-3 md:line-clamp-2">
               {group.title}
             </h1>
 

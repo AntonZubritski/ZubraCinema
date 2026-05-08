@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ApiError, fetchCategoryPage, getSettings, type Group } from '../api';
 import { useInfiniteScroll } from '../lib/useInfiniteScroll';
 import { categoryBySlug, isCategorySlug } from '../lib/categories';
+import { MovieCard } from '../components/MovieCard';
 import { MovieGrid, MovieGridSkeleton } from '../components/MovieGrid';
 import { SettingsModal } from '../components/SettingsModal';
 import { Sidebar } from '../components/Sidebar';
@@ -149,6 +150,23 @@ export default function CategoryPage() {
     return sortGroups(filtered, sort);
   }, [allGroups, langs, qualities, sort]);
 
+  // "Новинки" strip — top-N by year from the first page only. Pulled
+  // out of the same pages[0] data the grid below renders, so no extra
+  // network round-trip; just a different shaping (sort by year desc,
+  // cap at 15). Hidden when there's no recognisable year signal so we
+  // don't surface a row of "—" placeholders.
+  const newestGroups = useMemo(() => {
+    const firstPage = pages[0];
+    if (!firstPage || firstPage.length === 0) return [];
+    const filtered = filterGroups(firstPage, langs, qualities);
+    const withYears = filtered.filter((g) => g.year > 0);
+    if (withYears.length === 0) return [];
+    return withYears
+      .slice()
+      .sort((a, b) => b.year - a.year)
+      .slice(0, 15);
+  }, [pages, langs, qualities]);
+
   // Auto-load via IntersectionObserver is only safe when the current filter
   // actually returns at least one visible card. Otherwise the empty grid
   // leaves the sentinel permanently in viewport, and IO would hammer the
@@ -212,6 +230,10 @@ export default function CategoryPage() {
         </header>
 
         <main>
+          {newestGroups.length > 0 && (
+            <NewestStrip groups={newestGroups} onSelect={handleSelect} />
+          )}
+
           {(initialLoaded || allGroups.length > 0) && (
             <SortBar
               sort={sort}
@@ -298,7 +320,14 @@ export default function CategoryPage() {
                   </div>
                 </div>
               ) : (
-                <MovieGrid groups={visibleGroups} onSelect={handleSelect} />
+                <MovieGrid
+                  groups={visibleGroups}
+                  onSelect={handleSelect}
+                  // Only steal focus when there's no NewestStrip above —
+                  // otherwise the strip already has the first card and
+                  // we'd yank focus mid-orientation.
+                  autoFocusFirst={newestGroups.length === 0}
+                />
               )}
 
               {loading && pages.length > 0 && (
@@ -320,5 +349,108 @@ export default function CategoryPage() {
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
+  );
+}
+
+// NewestStrip — horizontal scroller pinned above the main grid, showing
+// the most recent releases inside this category (sorted by year DESC,
+// top 15). Pulls from the same first-page data the grid renders, so no
+// extra fetch is needed. Visually mirrors FeaturedRow / CategoryRow on
+// the home page so the pattern stays consistent across the app.
+function NewestStrip({
+  groups,
+  onSelect,
+}: {
+  groups: Group[];
+  onSelect: (g: Group) => void;
+}) {
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const autoFocusedRef = useRef(false);
+
+  const scrollBy = useCallback((delta: number) => {
+    stripRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
+  }, []);
+
+  // TV-mode arrow-key nav within the strip. Same shape as CategoryRow:
+  // ArrowLeft/Right move within the strip, ArrowUp/Down let through so
+  // the user can escape into the grid below.
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!document.body.classList.contains('tv-mode')) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const strip = stripRef.current;
+    if (!strip) return;
+    const cards = Array.from(strip.querySelectorAll<HTMLButtonElement>(':scope > div > button'));
+    if (cards.length === 0) return;
+    const idx = cards.findIndex((c) => c === document.activeElement);
+    if (idx < 0) return;
+    const target = e.key === 'ArrowLeft' ? idx - 1 : idx + 1;
+    if (target < 0 || target >= cards.length) return;
+    e.preventDefault();
+    cards[target].focus();
+  }, []);
+
+  // TV-mode: auto-focus the first card so the remote starts on a
+  // navigable element. Once-only per `groups` identity to avoid yanking
+  // focus away from the user mid-navigation.
+  useEffect(() => {
+    autoFocusedRef.current = false;
+  }, [groups]);
+  useEffect(() => {
+    if (autoFocusedRef.current) return;
+    if (!document.body.classList.contains('tv-mode')) return;
+    const strip = stripRef.current;
+    if (!strip) return;
+    const first = strip.querySelector<HTMLButtonElement>(':scope > div > button');
+    if (first) {
+      first.focus();
+      autoFocusedRef.current = true;
+    }
+  }, [groups]);
+
+  const stripClass =
+    'flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 [&::-webkit-scrollbar]:hidden';
+  const stripStyle = { scrollbarWidth: 'none' as const };
+
+  return (
+    <section className="mb-8 group/row relative">
+      <div className="mb-5 flex items-center gap-4">
+        <span className="text-bone-300/50 text-[11px] uppercase tracking-[0.25em]">
+          Новинки
+        </span>
+        <span className="flex-1 h-px bg-ink-700/60" />
+      </div>
+
+      <div className="relative">
+        <div ref={stripRef} className={stripClass} style={stripStyle} onKeyDown={onKeyDown}>
+          {groups.map((g) => (
+            <div key={g.id} className="flex-shrink-0 w-[150px] snap-start">
+              <MovieCard group={g} onClick={() => onSelect(g)} />
+            </div>
+          ))}
+        </div>
+        <NewestScrollArrow side="left" onClick={() => scrollBy(-600)} />
+        <NewestScrollArrow side="right" onClick={() => scrollBy(600)} />
+      </div>
+    </section>
+  );
+}
+
+function NewestScrollArrow({
+  side,
+  onClick,
+}: {
+  side: 'left' | 'right';
+  onClick: () => void;
+}) {
+  const isLeft = side === 'left';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isLeft ? 'Прокрутить назад' : 'Прокрутить вперёд'}
+      className={`hidden md:flex absolute ${isLeft ? 'left-0' : 'right-0'} top-0 bottom-2 z-10 items-center justify-center w-10 bg-ink-950/60 hover:bg-ink-950/80 text-bone-50 text-2xl opacity-0 group-hover/row:opacity-100 transition-opacity focus-ring`}
+    >
+      {isLeft ? '‹' : '›'}
+    </button>
   );
 }

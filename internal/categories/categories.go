@@ -11,7 +11,8 @@ type Category struct {
 	Slug    string // URL-safe ASCII, e.g. "movies-foreign"
 	LabelRU string // human label in Russian
 	// Source picks which scraper handles the listing. Empty = "rutor"
-	// (back-compat default). Other supported values: "rintor".
+	// (back-compat default). Other supported values: "rintor",
+	// "porevotorrent".
 	Source string
 	// RutorID is the rutor numeric category id (used when Source=="rutor").
 	RutorID string
@@ -25,6 +26,11 @@ type Category struct {
 	// RintorID is the rintor.org forum id (used when Source=="rintor").
 	// Maps to /viewforum.php?f=<RintorID>.
 	RintorID string
+	// PorevoTag is the porevotorrent.net tag slug (used when
+	// Source=="porevotorrent"). Maps to /tags/<PorevoTag>/. Tags include
+	// resolution buckets like "1080p" or "2160p", studio names like
+	// "Brazzers.com", and broad genre labels like "Anal" or "Russian".
+	PorevoTag string
 	// Adult marks 18+ categories. The home page hides these unless the
 	// user opted in via Settings (config.Adult). The backend itself
 	// doesn't gate /api/category — that stays open so deep links work
@@ -73,6 +79,19 @@ var all = []Category{
 	{Slug: "adult-rintor-classic", Source: "rintor", RintorID: "25", LabelRU: "Классика / Ретро", Adult: true},
 	{Slug: "adult-rintor-japan", Source: "rintor", RintorID: "35", LabelRU: "Японское", Adult: true},
 	{Slug: "adult-rintor-hentai", Source: "rintor", RintorID: "58", LabelRU: "Хентай", Adult: true},
+
+	// porevotorrent.net — tag-based listings; no seeders/leechers data
+	// (it's a meta-index that hides .torrent files behind an ad CDN).
+	// Picked the tags that map cleanly to "what kind of release" rather
+	// than trying to mirror the site's full 80-tag taxonomy.
+	{Slug: "adult-porevo-2160p", Source: "porevotorrent", PorevoTag: "2160p", LabelRU: "4K Порно (porevo)", Adult: true},
+	{Slug: "adult-porevo-1080p", Source: "porevotorrent", PorevoTag: "1080p", LabelRU: "FHD Порно (porevo)", Adult: true},
+	{Slug: "adult-porevo-russian", Source: "porevotorrent", PorevoTag: "Russian", LabelRU: "Русские (porevo)", Adult: true},
+	{Slug: "adult-porevo-anal", Source: "porevotorrent", PorevoTag: "Anal", LabelRU: "Anal (porevo)", Adult: true},
+	{Slug: "adult-porevo-amateur", Source: "porevotorrent", PorevoTag: "Amateur", LabelRU: "Amateur (porevo)", Adult: true},
+	{Slug: "adult-porevo-milf", Source: "porevotorrent", PorevoTag: "MILF", LabelRU: "MILF (porevo)", Adult: true},
+	{Slug: "adult-porevo-teen", Source: "porevotorrent", PorevoTag: "Teen", LabelRU: "Teen (porevo)", Adult: true},
+	{Slug: "adult-porevo-pov", Source: "porevotorrent", PorevoTag: "POV", LabelRU: "POV (porevo)", Adult: true},
 }
 
 // All returns the canonical category list in home-page display order.

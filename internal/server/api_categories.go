@@ -6,11 +6,13 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/AntonZubritski/ZubraCinema/internal/categories"
 	"github.com/AntonZubritski/ZubraCinema/internal/grouping"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/porevotorrent"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rintor"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 )
@@ -60,7 +62,7 @@ func handleListCategories() http.HandlerFunc {
 // browse of a single category, grouped the same way /api/search and
 // /api/featured are. Dispatches to the source named in cat.Source
 // (default "rutor").
-func handleCategoryBrowse(rutorSrc *rutor.Source, rintorSrc *rintor.Source, agg *sources.Aggregator) http.HandlerFunc {
+func handleCategoryBrowse(rutorSrc *rutor.Source, rintorSrc *rintor.Source, porevoSrc *porevotorrent.Source, agg *sources.Aggregator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 		cat, ok := categories.BySlug(slug)
@@ -103,6 +105,12 @@ func handleCategoryBrowse(rutorSrc *rutor.Source, rintorSrc *rintor.Source, agg 
 				return
 			}
 			torrents, err = rintorSrc.BrowseCategory(ctx, cat.RintorID, page)
+		case "porevotorrent":
+			if porevoSrc == nil {
+				writeError(w, http.StatusServiceUnavailable, "porevotorrent source not configured")
+				return
+			}
+			torrents, err = porevoSrc.BrowseCategory(ctx, cat.PorevoTag, page)
 		case "", "rutor":
 			if cat.RutorTag != "" {
 				// Tag (genre) listing: rutor's /tag/ endpoint doesn't
@@ -135,7 +143,24 @@ func handleCategoryBrowse(rutorSrc *rutor.Source, rintorSrc *rintor.Source, agg 
 
 		hasMore := !tagOnly && len(torrents) >= categoryHasMoreThreshold
 
-		torrents = agg.EnrichPosters(ctx, torrents)
+		// Poster enrichment. Rutor torrents are enriched via the aggregator
+		// (it knows about that source). Rintor lives outside the aggregator
+		// (it's not in global search), so we fetch its posters inline here
+		// using the same fan-out concurrency model. Same soft-fail semantics
+		// as EnrichPosters: failures leave PosterURL empty.
+		switch cat.Source {
+		case "rintor":
+			if rintorSrc != nil {
+				torrents = enrichRintorPosters(ctx, rintorSrc, torrents)
+			}
+		case "porevotorrent":
+			// porevotorrent listings already include the thumbnail inline,
+			// so no enrichment is needed. The detail page might have a
+			// larger image but the latency cost (per-card fetch) isn't
+			// worth it given the listing thumb is already a clean 200x150.
+		default:
+			torrents = agg.EnrichPosters(ctx, torrents)
+		}
 		groups := grouping.GroupTorrents(torrents)
 		if groups == nil {
 			groups = []grouping.Group{}
@@ -147,4 +172,43 @@ func handleCategoryBrowse(rutorSrc *rutor.Source, rintorSrc *rintor.Source, agg 
 			HasMore: hasMore,
 		})
 	}
+}
+
+// enrichRintorPosters fetches posters for rintor torrents in parallel.
+// Mirrors the behaviour of Aggregator.EnrichPosters (timeout, semaphore-
+// gated fan-out, soft-fail) but talks to the rintor source directly,
+// because rintor lives outside the global-search aggregator.
+const (
+	rintorEnrichTimeout = 10 * time.Second
+	rintorEnrichLimit   = 8
+)
+
+func enrichRintorPosters(ctx context.Context, src *rintor.Source, torrents []sources.Torrent) []sources.Torrent {
+	if src == nil || len(torrents) == 0 {
+		return torrents
+	}
+	cctx, cancel := context.WithTimeout(ctx, rintorEnrichTimeout)
+	defer cancel()
+
+	sem := make(chan struct{}, rintorEnrichLimit)
+	var wg sync.WaitGroup
+
+	for i := range torrents {
+		t := &torrents[i]
+		if t.PosterURL != "" || t.DetailURL == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t *sources.Torrent) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			poster, err := src.FetchPoster(cctx, t.DetailURL)
+			if err == nil && poster != "" {
+				t.PosterURL = poster
+			}
+		}(t)
+	}
+	wg.Wait()
+	return torrents
 }

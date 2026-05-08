@@ -11,6 +11,7 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/metadata"
 	"github.com/AntonZubritski/ZubraCinema/internal/setup"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/porevotorrent"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rintor"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 	ztorrent "github.com/AntonZubritski/ZubraCinema/internal/torrent"
@@ -24,6 +25,7 @@ type Deps struct {
 	Aggregator *sources.Aggregator
 	Rutor      *rutor.Source
 	Rintor     *rintor.Source
+	Porevo     *porevotorrent.Source
 	Transcoder *transcode.Transcoder
 	Setup      *setup.Manager
 	Metadata   *metadata.Client
@@ -39,6 +41,9 @@ type Deps struct {
 	// writes back to. Empty disables settings persistence (the API still
 	// reports the running config but POST is rejected).
 	ConfigPath string
+	// Port is the HTTP port the server is bound to. The settings API
+	// uses it to compute LAN URLs the user can copy onto a TV browser.
+	Port int
 }
 
 func New(d Deps) http.Handler {
@@ -57,7 +62,7 @@ func New(d Deps) http.Handler {
 	// they're gated behind the same nil-check as featured.
 	mux.HandleFunc("GET /api/categories", handleListCategories())
 	if d.Rutor != nil {
-		mux.HandleFunc("GET /api/category/{slug}", handleCategoryBrowse(d.Rutor, d.Rintor, d.Aggregator))
+		mux.HandleFunc("GET /api/category/{slug}", handleCategoryBrowse(d.Rutor, d.Rintor, d.Porevo, d.Aggregator))
 	}
 
 	// Torrent CRUD
@@ -105,7 +110,7 @@ func New(d Deps) http.Handler {
 
 	// Settings: read and write the on-disk config (currently just the
 	// downloads directory). Folder-picker spawns the OS-native dialog.
-	mux.HandleFunc("GET /api/settings", handleGetSettings(d.Manager, d.ConfigPath))
+	mux.HandleFunc("GET /api/settings", handleGetSettings(d.Manager, d.ConfigPath, d.Port))
 	mux.HandleFunc("POST /api/settings", handleUpdateSettings(d.Manager, d.ConfigPath))
 	mux.HandleFunc("POST /api/folder-picker", handleFolderPicker())
 

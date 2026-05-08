@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/btdig"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/eztv"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/onethreethreesevenx"
+	"github.com/AntonZubritski/ZubraCinema/internal/sources/porevotorrent"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rintor"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutor"
 	"github.com/AntonZubritski/ZubraCinema/internal/sources/rutracker"
@@ -88,6 +90,20 @@ func main() {
 
 	if err := os.MkdirAll(*downloadsDir, 0o755); err != nil {
 		log.Fatalf("create downloads dir: %v", err)
+	}
+
+	// Mirror everything log.Printf writes to a file alongside the binary
+	// so users can dig into cleanup / swarm-discovery diagnostics without
+	// having to keep the cmd window in sight. Append-only, never rotated
+	// — if it grows it grows; the user can wipe it manually.
+	if exe, err := os.Executable(); err == nil {
+		logPath := filepath.Join(filepath.Dir(exe), "zubracinema.log")
+		if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, f))
+			log.Printf("==== session start; log file: %s ====", logPath)
+		} else {
+			log.Printf("could not open log file %s: %v (continuing with stderr only)", logPath, err)
+		}
 	}
 
 	mgr, err := ztorrent.New(*downloadsDir)
@@ -172,8 +188,20 @@ func main() {
 	// is cheap — just an http.Client wrapper) so toggling the flag in the
 	// Settings UI takes effect without a restart.
 	rintorSrc := rintor.New()
+	// porevotorrent.net — second adult tracker. Same lifecycle as rintor:
+	// optional, gated behind the Adult settings flag, http-client-only so
+	// no startup cost.
+	porevoSrc := porevotorrent.New()
 
-	addr := net.JoinHostPort("localhost", strconv.Itoa(*port))
+	// Bind to all interfaces (0.0.0.0) when LAN access is on so TVs and
+	// other LAN devices can reach us; otherwise loopback only. Browser
+	// auto-open still uses localhost regardless — that's the user's own
+	// PC. LAN devices read the LAN URLs out of /api/settings.
+	host := "localhost"
+	if cfg.LANAccess {
+		host = "0.0.0.0"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(*port))
 	srv := &http.Server{
 		Addr: addr,
 		Handler: server.New(server.Deps{
@@ -181,7 +209,9 @@ func main() {
 			Aggregator: agg,
 			Rutor:      rutorSrc,
 			Rintor:     rintorSrc,
+			Porevo:     porevoSrc,
 			Transcoder: tc,
+			Port:       *port,
 			Setup:      setupMgr,
 			Metadata:   mdClient,
 			OMDb:       omdbClient,

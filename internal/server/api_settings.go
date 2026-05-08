@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -22,27 +24,38 @@ import (
 //   - canPickFolder gates the "Browse..." button on platforms without an
 //     OS-native dialog (Linux today)
 type settingsResponse struct {
-	DownloadsDir   string `json:"downloadsDir"`
-	ConfigPath     string `json:"configPath"`
-	Free           uint64 `json:"free"`
-	Total          uint64 `json:"total"`
-	ActiveTorrents int    `json:"activeTorrents"`
-	CanPickFolder  bool   `json:"canPickFolder"`
-	Adult          bool   `json:"adult"`
+	DownloadsDir   string   `json:"downloadsDir"`
+	ConfigPath     string   `json:"configPath"`
+	Free           uint64   `json:"free"`
+	Total          uint64   `json:"total"`
+	ActiveTorrents int      `json:"activeTorrents"`
+	CanPickFolder  bool     `json:"canPickFolder"`
+	Adult          bool     `json:"adult"`
+	LANAccess      bool     `json:"lanAccess"`
+	TVMode         bool     `json:"tvMode"`
+	// LANUrls lists every http://<ip>:<port>/ that's reachable from
+	// other LAN devices when LANAccess is true. Empty when LANAccess is
+	// false or no non-loopback interfaces are up. Frontend shows these
+	// as copy-paste targets so the user can type them on a TV.
+	LANUrls []string `json:"lanUrls"`
 }
 
-func handleGetSettings(mgr *ztorrent.Manager, configPath string) http.HandlerFunc {
+func handleGetSettings(mgr *ztorrent.Manager, configPath string, port int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dir := mgr.DownloadDir()
 		free, total, _ := diskUsage(dir)
-		// Read adult flag from disk on every probe — cheap (small file)
-		// and keeps a stale in-memory value from drifting if the user
-		// edits config.json by hand.
-		adult := false
+		// Read flags from disk on every probe — cheap (small file) and
+		// keeps a stale in-memory value from drifting if the user edits
+		// config.json by hand.
+		var cfg config.Config
 		if configPath != "" {
-			if cfg, err := config.Load(configPath); err == nil {
-				adult = cfg.Adult
+			if loaded, err := config.Load(configPath); err == nil {
+				cfg = loaded
 			}
+		}
+		var urls []string
+		if cfg.LANAccess {
+			urls = lanURLs(port)
 		}
 		writeJSON(w, http.StatusOK, settingsResponse{
 			DownloadsDir:   dir,
@@ -51,7 +64,10 @@ func handleGetSettings(mgr *ztorrent.Manager, configPath string) http.HandlerFun
 			Total:          total,
 			ActiveTorrents: len(mgr.List()),
 			CanPickFolder:  folderpicker.Available(),
-			Adult:          adult,
+			Adult:          cfg.Adult,
+			LANAccess:      cfg.LANAccess,
+			TVMode:         cfg.TVMode,
+			LANUrls:        urls,
 		})
 	}
 }
@@ -73,6 +89,8 @@ func handleUpdateSettings(mgr *ztorrent.Manager, configPath string) http.Handler
 	type req struct {
 		DownloadsDir *string `json:"downloadsDir,omitempty"`
 		Adult        *bool   `json:"adult,omitempty"`
+		LANAccess    *bool   `json:"lanAccess,omitempty"`
+		TVMode       *bool   `json:"tvMode,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body req
@@ -80,7 +98,7 @@ func handleUpdateSettings(mgr *ztorrent.Manager, configPath string) http.Handler
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if body.DownloadsDir == nil && body.Adult == nil {
+		if body.DownloadsDir == nil && body.Adult == nil && body.LANAccess == nil && body.TVMode == nil {
 			writeError(w, http.StatusBadRequest, "no fields to update")
 			return
 		}
@@ -118,6 +136,12 @@ func handleUpdateSettings(mgr *ztorrent.Manager, configPath string) http.Handler
 		if body.Adult != nil {
 			cfg.Adult = *body.Adult
 		}
+		if body.LANAccess != nil {
+			cfg.LANAccess = *body.LANAccess
+		}
+		if body.TVMode != nil {
+			cfg.TVMode = *body.TVMode
+		}
 
 		if configPath != "" {
 			if err := config.Save(configPath, cfg); err != nil {
@@ -125,6 +149,8 @@ func handleUpdateSettings(mgr *ztorrent.Manager, configPath string) http.Handler
 				writeJSON(w, http.StatusOK, map[string]any{
 					"downloadsDir": newDir,
 					"adult":        cfg.Adult,
+					"lanAccess":    cfg.LANAccess,
+					"tvMode":       cfg.TVMode,
 					"warning":      "applied for this session, but failed to persist: " + err.Error(),
 				})
 				return
@@ -134,8 +160,54 @@ func handleUpdateSettings(mgr *ztorrent.Manager, configPath string) http.Handler
 		writeJSON(w, http.StatusOK, map[string]any{
 			"downloadsDir": newDir,
 			"adult":        cfg.Adult,
+			"lanAccess":    cfg.LANAccess,
+			"tvMode":       cfg.TVMode,
 		})
 	}
+}
+
+// lanURLs walks the host's network interfaces and returns one
+// http://<ip>:<port>/ string per usable IPv4 address. We skip loopback
+// (no point — the user's already on it), link-local (169.254.x.x,
+// non-routable), and IPv6 for now (TVs handle v4 reliably; v6 setup
+// varies). The list lets the user copy a URL into their TV browser
+// without having to chase down ipconfig.
+func lanURLs(port int) []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil {
+				continue
+			}
+			ip = ip.To4()
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			out = append(out, fmt.Sprintf("http://%s:%d/", ip.String(), port))
+		}
+	}
+	return out
 }
 
 // handleFolderPicker spawns the OS-native folder dialog. We block waiting

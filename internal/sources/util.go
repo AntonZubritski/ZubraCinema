@@ -75,6 +75,42 @@ func DetectQuality(title string) *string {
 	return &upper
 }
 
+// EnrichMagnet appends DefaultTrackers to an existing magnet URI as
+// additional &tr= parameters, skipping any that are already present
+// (case-insensitive comparison). Used to rescue magnets from sources
+// that only embed a private tracker (e.g. rintor.org/bt/announce.php
+// without a passkey) — without this, anacrolix has nothing to talk to
+// except DHT, which can be slow or empty for niche swarms.
+//
+// Returns the input unchanged if it isn't a magnet URI.
+func EnrichMagnet(magnet string) string {
+	if !strings.HasPrefix(strings.ToLower(magnet), "magnet:") {
+		return magnet
+	}
+	q := magnet
+	if i := strings.Index(magnet, "?"); i >= 0 {
+		q = magnet[i+1:]
+	}
+	v, err := url.ParseQuery(q)
+	if err != nil {
+		return magnet
+	}
+	have := make(map[string]struct{}, len(v["tr"]))
+	for _, t := range v["tr"] {
+		have[strings.ToLower(strings.TrimSpace(t))] = struct{}{}
+	}
+	var b strings.Builder
+	b.WriteString(magnet)
+	for _, t := range DefaultTrackers {
+		if _, ok := have[strings.ToLower(t)]; ok {
+			continue
+		}
+		b.WriteString("&tr=")
+		b.WriteString(url.QueryEscape(t))
+	}
+	return b.String()
+}
+
 // MagnetInfoHash extracts the BTIH (lowercase hex) from a magnet URI.
 // Returns empty string if not present.
 func MagnetInfoHash(magnet string) string {

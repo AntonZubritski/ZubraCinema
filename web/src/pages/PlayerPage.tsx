@@ -105,6 +105,29 @@ export default function PlayerPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Custom-controls state. Browser-native <video controls> stacked under our
+  // SeekBar/track menus and looked broken (two rows of buttons), so we hide
+  // them entirely and re-implement Play/Pause/Volume in our own chrome.
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+
+  // TV mode is driven by the `tv-mode` body class set in App.tsx after
+  // polling getSettings(). We sample it on mount (and on phase changes)
+  // rather than making our own settings call. Memory-tight TV browsers
+  // need a smaller media buffer (preload="metadata") and a chunkier UI.
+  const isTV =
+    typeof document !== 'undefined' &&
+    document.body.classList.contains('tv-mode');
+
+  // Auto-focus the play/pause button once playback begins, so the TV
+  // remote's D-pad lands on a reachable control.
+  const playPauseRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!isTV) return;
+    if (phase !== 'playing') return;
+    playPauseRef.current?.focus();
+  }, [isTV, phase]);
 
   // Adult hint passed from MoviePage. We start muted on 18+ content so a
   // surprise loud audio doesn't broadcast across the room. Default: false.
@@ -150,6 +173,69 @@ export default function PlayerPage() {
       void el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     }
   }, []);
+
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    // If we unmute while volume is 0, restore something audible — otherwise
+    // the unmute does nothing perceptible and the user thinks it's broken.
+    if (!v.muted && v.volume === 0) {
+      v.volume = 0.5;
+    }
+  }, []);
+
+  const handleVolumeChange = useCallback((next: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const clamped = Math.max(0, Math.min(1, next));
+    v.volume = clamped;
+    if (clamped > 0 && v.muted) {
+      v.muted = false;
+    }
+  }, []);
+
+  // Keyboard shortcuts that match the conventions of every desktop video
+  // player. Bound on document so the focus doesn't have to be on the video
+  // element itself; ignored when an input/textarea is focused so the user
+  // can still type elsewhere.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && /input|textarea|select/i.test(tgt.tagName)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [togglePlay, toggleMute, toggleFullscreen]);
 
   // Latest torrent reference for the unmount cleanup effect, which only fires
   // when the page is actually torn down (otherwise it would re-fire on every
@@ -590,15 +676,23 @@ export default function PlayerPage() {
                   <video
                     key={playbackUrl}
                     ref={videoRef}
-                    controls
                     playsInline
-                    preload="metadata"
+                    preload={isTV ? 'metadata' : 'auto'}
                     autoPlay
                     muted={isAdult}
                     src={playbackUrl}
-                    className="absolute inset-0 w-full h-full block"
+                    onClick={togglePlay}
+                    className="absolute inset-0 w-full h-full block cursor-pointer"
                     style={{ objectFit: 'contain' }}
                     onPlaying={() => setPhase('playing')}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onVolumeChange={() => {
+                      const v = videoRef.current;
+                      if (!v) return;
+                      setVolume(v.volume);
+                      setMuted(v.muted);
+                    }}
                     onError={() => setPhase('error')}
                     onTimeUpdate={handleVideoTimeUpdate}
                     onProgress={handleVideoProgress}
@@ -609,6 +703,13 @@ export default function PlayerPage() {
                       const v = videoRef.current;
                       if (v && Number.isFinite(v.duration) && v.duration > 0 && !isTranscoding) {
                         setDurationSec(v.duration);
+                      }
+                      // Sync volume/mute state with the actual element
+                      // (autoplay policies + isAdult muting may have
+                      // overridden our defaults).
+                      if (v) {
+                        setVolume(v.volume);
+                        setMuted(v.muted);
                       }
                     }}
                   >
@@ -640,39 +741,63 @@ export default function PlayerPage() {
                     transcoding={isTranscoding}
                   />
                 )}
-                {/* Custom seek bar overlaid at the bottom of the player.
-                    Hidden while the PlaybackOverlay is up so it doesn't
-                    poke through the spinner / messaging. Sits above the
-                    native video controls via z-20. */}
+                {/* Single custom-controls strip — replaces the browser's
+                    native <video controls> bar (which used to stack under
+                    our SeekBar/track menus and looked broken). All UI
+                    pieces sit on the SAME row as the SeekBar with one
+                    consistent style. Auto-hides with the rest of the
+                    chrome after IDLE_MS of mouse stillness. */}
                 {phase === 'playing' && (
-                  // bottom-12 (= 48px) leaves room for the native browser
-                  // controls (play/volume/fullscreen) directly underneath.
-                  // Auto-hides with the rest of the chrome after IDLE_MS
-                  // of mouse stillness so the panel doesn't park over the
-                  // film while the user just watches.
                   <div
                     className={`
-                      absolute inset-x-0 bottom-12 z-20 px-4 pt-8 pb-2
-                      bg-gradient-to-t from-black/85 via-black/40 to-transparent
+                      absolute inset-x-0 bottom-0 z-20 px-4 pt-12 pb-3
+                      bg-gradient-to-t from-black/90 via-black/55 to-transparent
                       pointer-events-none
                       transition-opacity duration-300
                       ${controlsVisible ? 'opacity-100' : 'opacity-0'}
                     `}
                   >
                     <div className="pointer-events-auto">
-                      <SeekBar
-                        durationSec={durationSec}
-                        positionSec={displayPositionSec}
-                        bufferedSec={displayBufferedSec}
-                        disabled={durationSec <= 0}
-                        onSeek={handleSeek}
-                      />
-                      {/* Track pickers — shown only when there's a real
-                          choice. Audio menu requires >1 audio stream
-                          (single-track files don't need a picker). Subs
-                          menu shows whenever subtitles exist, since
-                          turning them off is a meaningful action. */}
+                      {/* TV mode bumps the SeekBar's vertical hit-area so a
+                          D-pad cursor + Enter press has a chunkier target. */}
+                      <div className={isTV ? 'py-3' : 'py-1'}>
+                        <SeekBar
+                          durationSec={durationSec}
+                          positionSec={displayPositionSec}
+                          bufferedSec={displayBufferedSec}
+                          disabled={durationSec <= 0}
+                          onSeek={handleSeek}
+                        />
+                      </div>
+                      {/* Bottom row: Play/Pause + Volume on the left,
+                          Audio/Subs/Fullscreen on the right. Single
+                          horizontal row — no more visual stacking. */}
                       <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <PlayerIconButton
+                          onClick={togglePlay}
+                          ariaLabel={isPlaying ? 'Пауза' : 'Воспроизвести'}
+                          buttonRef={playPauseRef}
+                        >
+                          {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                        </PlayerIconButton>
+
+                        <VolumeControl
+                          muted={muted}
+                          volume={volume}
+                          onToggleMute={toggleMute}
+                          onVolumeChange={handleVolumeChange}
+                        />
+
+                        <span
+                          className={`px-1 tabular-nums text-bone-200/85 leading-none ${
+                            isTV ? 'text-base' : 'text-[11px]'
+                          }`}
+                        >
+                          {formatClock(displayPositionSec)} <span className="text-bone-300/40">/</span> {formatClock(durationSec)}
+                        </span>
+
+                        <div className="flex-1" />
+
                         {audioTracks.length > 1 && (
                           <TrackMenu
                             label="Аудио"
@@ -689,23 +814,13 @@ export default function PlayerPage() {
                             onChange={setSubtitleIndex}
                           />
                         )}
-                        <div className="flex-1" />
-                        <button
-                          type="button"
+
+                        <PlayerIconButton
                           onClick={toggleFullscreen}
-                          className="
-                            focus-ring
-                            inline-flex items-center justify-center
-                            w-9 h-9 rounded-full
-                            bg-white/5 hover:bg-white/10
-                            border border-white/10
-                            text-bone-200/85 hover:text-bone-50
-                            transition-colors
-                          "
-                          aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'Полный экран'}
+                          ariaLabel={isFullscreen ? 'Выйти из полноэкранного режима' : 'Полный экран'}
                         >
                           {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
-                        </button>
+                        </PlayerIconButton>
                       </div>
                     </div>
                   </div>
@@ -727,6 +842,9 @@ export default function PlayerPage() {
                 <span className="text-bone-300/30">·</span>
                 <span>
                   Peers <span className="text-bone-100 tabular-nums normal-case tracking-normal">{torrent.peers}</span>
+                  {(torrent.totalPeers ?? 0) > torrent.peers && (
+                    <span className="text-bone-300/40 tabular-nums normal-case tracking-normal"> / {torrent.totalPeers}</span>
+                  )}
                 </span>
                 <span className="text-bone-300/30">·</span>
                 <span>
@@ -832,7 +950,14 @@ function StatsPanel({
         <ProgressBar progress={activeProgress} />
       </div>
       <div className="grid grid-cols-2 gap-3 pt-1">
-        <Stat label="Peers" value={String(torrent.peers)} />
+        <Stat
+          label="Peers"
+          value={
+            (torrent.totalPeers ?? 0) > torrent.peers
+              ? `${torrent.peers} / ${torrent.totalPeers}`
+              : String(torrent.peers)
+          }
+        />
         <Stat label="Speed" value={formatRate(torrent.downloadRate)} />
       </div>
     </div>
@@ -1028,6 +1153,167 @@ function PlaybackOverlay({
   );
 }
 
+// formatClock turns a seconds count into "M:SS" or "H:MM:SS" depending
+// on whether the value crosses an hour. Mirrors what every desktop video
+// player uses below the seekbar. Returns "—" for the unknown / probing
+// case (no duration yet).
+function formatClock(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '—';
+  const total = Math.floor(sec);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = String(s).padStart(2, '0');
+  if (h > 0) {
+    const mm = String(m).padStart(2, '0');
+    return `${h}:${mm}:${ss}`;
+  }
+  return `${m}:${ss}`;
+}
+
+// PlayerIconButton — round 36px button used for Play/Pause/Mute/Fullscreen.
+// One style for all icon-only controls so the bottom strip reads as a
+// single visual unit instead of mismatched chips. In TV mode (body has
+// the `tv-mode` class) the button bumps to 48px so it's legible from the
+// couch and easier for D-pad nav to land on.
+function PlayerIconButton({
+  onClick,
+  ariaLabel,
+  children,
+  buttonRef,
+}: {
+  onClick: () => void;
+  ariaLabel: string;
+  children: React.ReactNode;
+  buttonRef?: React.Ref<HTMLButtonElement>;
+}) {
+  const isTV =
+    typeof document !== 'undefined' &&
+    document.body.classList.contains('tv-mode');
+  const sizeClass = isTV ? 'w-12 h-12' : 'w-9 h-9';
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      onClick={onClick}
+      className={`
+        focus-ring
+        inline-flex items-center justify-center
+        ${sizeClass} rounded-full
+        bg-white/[0.05] hover:bg-white/[0.12]
+        border border-white/10
+        text-bone-100 hover:text-bone-50
+        transition-colors
+      `}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Helper for icons inside PlayerIconButton — reads the body class so the
+// SVGs bump up proportionally on TV. Defined alongside PlayerIconButton
+// so all icon size decisions live in one spot.
+function iconSize(base: number): number {
+  if (typeof document === 'undefined') return base;
+  return document.body.classList.contains('tv-mode')
+    ? Math.round(base * 1.45)
+    : base;
+}
+
+// VolumeControl — mute button + horizontal slider that expands on hover.
+// Slider stays compact when not interacting so it doesn't crowd the
+// SeekBar; growing on hover gives the user a real range to drag without
+// permanent visual noise.
+function VolumeControl({
+  muted,
+  volume,
+  onToggleMute,
+  onVolumeChange,
+}: {
+  muted: boolean;
+  volume: number;
+  onToggleMute: () => void;
+  onVolumeChange: (v: number) => void;
+}) {
+  const effective = muted ? 0 : volume;
+  return (
+    <div className="group/vol flex items-center">
+      <PlayerIconButton onClick={onToggleMute} ariaLabel={muted ? 'Включить звук' : 'Выключить звук'}>
+        {muted || volume === 0 ? <MuteIcon /> : volume < 0.5 ? <VolumeLowIcon /> : <VolumeIcon />}
+      </PlayerIconButton>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={effective}
+        onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+        aria-label="Громкость"
+        className="
+          ml-1 h-1
+          w-0 group-hover/vol:w-24 focus:w-24
+          opacity-0 group-hover/vol:opacity-100 focus:opacity-100
+          transition-all duration-200
+          accent-ember-300 cursor-pointer
+        "
+      />
+    </div>
+  );
+}
+
+function PlayIcon() {
+  const s = iconSize(14);
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M6 4l14 8-14 8z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  const s = iconSize(14);
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+function VolumeIcon() {
+  const s = iconSize(15);
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+      <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+    </svg>
+  );
+}
+
+function VolumeLowIcon() {
+  const s = iconSize(15);
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    </svg>
+  );
+}
+
+function MuteIcon() {
+  const s = iconSize(15);
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor" />
+      <line x1="22" y1="9" x2="16" y2="15" />
+      <line x1="16" y1="9" x2="22" y2="15" />
+    </svg>
+  );
+}
+
 function ExternalIcon() {
   return (
     <svg
@@ -1049,8 +1335,9 @@ function ExternalIcon() {
 }
 
 function FullscreenIcon() {
+  const s = iconSize(16);
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 9V5a1 1 0 0 1 1-1h4" />
       <path d="M20 9V5a1 1 0 0 0-1-1h-4" />
       <path d="M4 15v4a1 1 0 0 0 1 1h4" />
@@ -1060,8 +1347,9 @@ function FullscreenIcon() {
 }
 
 function FullscreenExitIcon() {
+  const s = iconSize(16);
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M9 4v3a2 2 0 0 1-2 2H4" />
       <path d="M15 4v3a2 2 0 0 0 2 2h3" />
       <path d="M9 20v-3a2 2 0 0 0-2-2H4" />

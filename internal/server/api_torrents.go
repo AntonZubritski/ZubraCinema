@@ -14,7 +14,10 @@ import (
 
 type addTorrentReq struct {
 	Magnet string `json:"magnet"`
-	Mode   string `json:"mode"`
+	// TorrentFileURL is an alternative to Magnet for sources that only
+	// publish .torrent files. Magnet wins if both are set.
+	TorrentFileURL string `json:"torrentFileUrl"`
+	Mode           string `json:"mode"`
 }
 
 func handleAddTorrent(m *ztorrent.Manager) http.HandlerFunc {
@@ -25,7 +28,14 @@ func handleAddTorrent(m *ztorrent.Manager) http.HandlerFunc {
 			return
 		}
 		body.Magnet = strings.TrimSpace(body.Magnet)
-		if body.Magnet == "" || !strings.HasPrefix(strings.ToLower(body.Magnet), "magnet:") {
+		body.TorrentFileURL = strings.TrimSpace(body.TorrentFileURL)
+		hasMagnet := body.Magnet != ""
+		hasFileURL := body.TorrentFileURL != ""
+		if !hasMagnet && !hasFileURL {
+			http.Error(w, "magnet URI or torrent file URL required", http.StatusBadRequest)
+			return
+		}
+		if hasMagnet && !strings.HasPrefix(strings.ToLower(body.Magnet), "magnet:") {
 			http.Error(w, "invalid magnet URI", http.StatusBadRequest)
 			return
 		}
@@ -40,15 +50,27 @@ func handleAddTorrent(m *ztorrent.Manager) http.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		// 90s budget to fetch the torrent's metadata via DHT/trackers. Cold
+		// starts on rare swarms (especially adult-tracker DHT-only releases)
+		// regularly take 40-60s before the first peer hands over the info
+		// dictionary; 30s used to time out legitimate releases.
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
-		item, err := m.AddMagnet(ctx, body.Magnet, mode)
+		var (
+			item *ztorrent.Item
+			err  error
+		)
+		if hasMagnet {
+			item, err = m.AddMagnet(ctx, body.Magnet, mode)
+		} else {
+			item, err = m.AddTorrentFileURL(ctx, body.TorrentFileURL, mode)
+		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				http.Error(w, "metadata fetch timeout", http.StatusGatewayTimeout)
 				return
 			}
-			log.Printf("add magnet error: %v", err)
+			log.Printf("add torrent error: %v", err)
 			http.Error(w, "failed to add torrent", http.StatusBadGateway)
 			return
 		}

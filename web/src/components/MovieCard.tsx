@@ -70,8 +70,13 @@ export function MovieCard({ group, onClick }: Props) {
         if (hasCover && !imgFailed) setHovered(group.posterUrl);
       }}
       onMouseLeave={() => setHovered(null)}
-      onFocus={() => {
+      onFocus={(e) => {
         if (hasCover && !imgFailed) setHovered(group.posterUrl);
+        // TV-remote ergonomics: bring the freshly-focused card into view.
+        // `block: 'nearest', inline: 'nearest'` is harmless for already-
+        // visible cards and works equally well in vertical (grid) and
+        // horizontal (CategoryRow / NewestStrip) scroll containers.
+        e.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }}
       onBlur={() => setHovered(null)}
       className="focus-ring group text-left flex flex-col gap-2 w-full"

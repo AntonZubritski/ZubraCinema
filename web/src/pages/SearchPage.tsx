@@ -9,6 +9,7 @@ import {
   type Group,
 } from '../api';
 import { CategoryRow } from '../components/CategoryRow';
+import { FfmpegRequiredModal } from '../components/FfmpegRequiredModal';
 import { MovieCard } from '../components/MovieCard';
 import { SearchBar } from '../components/SearchBar';
 import { MovieGrid, MovieGridSkeleton } from '../components/MovieGrid';
@@ -49,6 +50,12 @@ export default function SearchPage() {
   const [showSearchOverlay, setShowSearchOverlay] = useState(false);
   const [adultEnabled, setAdultEnabled] = useState<boolean>(false);
   const [section, setSection] = useState<'movies' | 'adult'>('movies');
+  // refreshKey bumps every time the user clicks "Обновить". It's woven
+  // into the React keys of the FeaturedRow and each CategoryRow so they
+  // remount and re-fetch from their respective trackers — a manual
+  // override of any HTTP-cache-warmed listing data.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   // Ambient backdrop URL — populated from the first featured-row poster on
   // mount. Renders behind the entire home page to give it the cinematic
   // "always-on still" feel of Lampa CUB. When the user hovers a card, the
@@ -56,6 +63,7 @@ export default function SearchPage() {
   const [ambientBackdrop, setAmbientBackdrop] = useState<string>('');
 
   const abortRef = useRef<AbortController | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
 
   // Fetch the first poster from the top featured row to use as ambient
@@ -180,6 +188,41 @@ export default function SearchPage() {
     setShowSearchOverlay(false);
   }, [query, scope, runSearch]);
 
+  // TV-mode auto-focus on the home (featured) page. The category rows fetch
+  // their data asynchronously, so we can't just call .focus() in a single
+  // useEffect — the cards aren't in the DOM yet. Instead we set up a
+  // MutationObserver on <main> and grab the first <button> that lands
+  // inside a row strip. We disconnect after the first focus so subsequent
+  // user navigation isn't yanked back. Resets when the user toggles back
+  // into "featured" mode (e.g. cleared search input).
+  useEffect(() => {
+    if (mode !== 'featured') return;
+    if (!document.body.classList.contains('tv-mode')) return;
+    const main = mainRef.current;
+    if (!main) return;
+
+    const tryFocus = (): boolean => {
+      const btn = main.querySelector<HTMLButtonElement>('section button');
+      if (!btn) return false;
+      btn.focus();
+      return true;
+    };
+
+    if (tryFocus()) return;
+
+    const observer = new MutationObserver(() => {
+      if (tryFocus()) observer.disconnect();
+    });
+    observer.observe(main, { childList: true, subtree: true });
+    // Safety fuse — never observe forever; 5s is plenty for the first
+    // tracker request to complete and render at least one card.
+    const fuse = window.setTimeout(() => observer.disconnect(), 5000);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(fuse);
+    };
+  }, [mode, refreshKey, section]);
+
   const handleSelect = useCallback(
     (group: Group) => {
       navigate(`/movie/${encodeURIComponent(group.id)}`, { state: { group } });
@@ -227,35 +270,46 @@ export default function SearchPage() {
       )}
 
       <div className="relative z-10 max-w-[1500px] mx-auto px-5 lg:px-8 pt-4 pb-24">
-        <main>
+        <main ref={mainRef}>
           {mode === 'featured' ? (
             <>
               <div className="mb-6">
                 <SetupBanner />
               </div>
-              {adultEnabled && (
-                <div className="mb-6 flex items-center gap-1 border-b border-white/[0.06]">
-                  <SectionTab
-                    label="Кино"
-                    active={section === 'movies'}
-                    onClick={() => setSection('movies')}
-                  />
-                  <SectionTab
-                    label="18+"
-                    active={section === 'adult'}
-                    onClick={() => setSection('adult')}
-                  />
-                </div>
-              )}
+              <div className="mb-6 flex items-center gap-1 border-b border-white/[0.06]">
+                {adultEnabled && (
+                  <>
+                    <SectionTab
+                      label="Кино"
+                      active={section === 'movies'}
+                      onClick={() => setSection('movies')}
+                    />
+                    <SectionTab
+                      label="18+"
+                      active={section === 'adult'}
+                      onClick={() => setSection('adult')}
+                    />
+                  </>
+                )}
+                <div className="flex-1" />
+                <RefreshButton
+                  refreshing={refreshing}
+                  onClick={() => {
+                    setRefreshing(true);
+                    setRefreshKey((k) => k + 1);
+                    window.setTimeout(() => setRefreshing(false), 1200);
+                  }}
+                />
+              </div>
               {/* "Новинки кино" — feed row pulling from /api/featured. Sits
                   above the category rows; visible only in the regular
                   movies section (skipped on the 18+ tab — /api/featured
                   is non-adult and would clutter the adult catalogue). */}
               {section === 'movies' && (
-                <FeaturedRow onSelect={handleSelect} />
+                <FeaturedRow key={`featured-${refreshKey}`} onSelect={handleSelect} />
               )}
               {visibleCategories.map((c) => (
-                <CategoryRow key={c.slug} slug={c.slug} label={c.label} />
+                <CategoryRow key={`${c.slug}-${refreshKey}`} slug={c.slug} label={c.label} />
               ))}
             </>
           ) : (
@@ -307,7 +361,7 @@ export default function SearchPage() {
                       }}
                     />
                   ) : (
-                    <MovieGrid groups={visibleGroups} onSelect={handleSelect} />
+                    <MovieGrid groups={visibleGroups} onSelect={handleSelect} autoFocusFirst />
                   )}
                 </>
               )}
@@ -316,6 +370,7 @@ export default function SearchPage() {
         </main>
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      <FfmpegRequiredModal />
     </div>
   );
 }
@@ -687,6 +742,58 @@ function SectionTab({
       {active && (
         <span className="absolute bottom-[-1px] left-0 right-0 h-px bg-ember-400" />
       )}
+    </button>
+  );
+}
+
+// RefreshButton — manual "re-fetch all rows" affordance pinned to the
+// right of the section-tabs strip. Clicking bumps a key counter that
+// remounts FeaturedRow + every CategoryRow, forcing each one to refetch.
+// The icon spins for ~1.2s after the click so the user gets feedback
+// even when the underlying network requests resolve faster than the eye
+// can register a state change.
+function RefreshButton({
+  refreshing,
+  onClick,
+}: {
+  refreshing: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={refreshing}
+      className="
+        focus-ring
+        inline-flex items-center gap-2
+        px-3.5 py-2
+        text-[11px] uppercase tracking-[0.2em] font-medium
+        text-bone-200/85 hover:text-ember-200
+        bg-white/[0.04] hover:bg-white/[0.08]
+        border border-white/[0.06]
+        transition-colors
+        disabled:opacity-60
+      "
+      style={{ borderRadius: 20 }}
+      aria-label="Обновить ленту трекеров"
+    >
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        className={refreshing ? 'animate-spin' : ''}
+      >
+        <path d="M21 12a9 9 0 1 1-3-6.7" />
+        <path d="M21 4v5h-5" />
+      </svg>
+      <span>Обновить</span>
     </button>
   );
 }

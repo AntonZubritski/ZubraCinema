@@ -62,6 +62,27 @@ export function CategoryRow({ slug, label, flat = false }: Props): JSX.Element {
     stripRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
   }, []);
 
+  // TV-mode arrow-key nav within a single horizontal strip. Only ArrowLeft
+  // and ArrowRight are captured — ArrowUp/Down are intentionally let
+  // through so the user can move *between* rows using whatever default
+  // focus-movement / page-scroll behaviour the browser provides. Wrapping
+  // around at strip boundaries is also intentionally NOT done; it would
+  // confuse a user who's still pressing right to escape the row.
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!document.body.classList.contains('tv-mode')) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const strip = stripRef.current;
+    if (!strip) return;
+    const cards = Array.from(strip.querySelectorAll<HTMLButtonElement>(':scope > div > button'));
+    if (cards.length === 0) return;
+    const idx = cards.findIndex((c) => c === document.activeElement);
+    if (idx < 0) return;
+    const target = e.key === 'ArrowLeft' ? idx - 1 : idx + 1;
+    if (target < 0 || target >= cards.length) return;
+    e.preventDefault();
+    cards[target].focus();
+  }, []);
+
   // Hide native scrollbar: Tailwind has no util, so combine Firefox's
   // `scrollbarWidth: 'none'` style with an arbitrary-variant for WebKit/Edge.
   const stripClass =
@@ -115,7 +136,7 @@ export function CategoryRow({ slug, label, flat = false }: Props): JSX.Element {
 
       {status === 'success' && groups.length > 0 && (
         <div className="relative">
-          <div ref={stripRef} className={stripClass} style={stripStyle}>
+          <div ref={stripRef} className={stripClass} style={stripStyle} onKeyDown={onKeyDown}>
             {groups.map((g) => (
               <div key={g.id} className="flex-shrink-0 w-[150px] snap-start">
                 <MovieCard group={g} onClick={() => handleSelect(g)} />

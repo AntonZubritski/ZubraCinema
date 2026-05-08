@@ -7,6 +7,12 @@ export type GroupTorrent = {
   quality: string | null;
   source: string;
   magnet: string;
+  /**
+   * Optional .torrent file URL for sources that don't expose magnet links
+   * (e.g. porevotorrent — its .torrent is hidden behind an ad-redirect
+   * CDN). The backend resolves it to a magnet at start time.
+   */
+  torrentFileUrl?: string;
   language: string;
 };
 
@@ -33,7 +39,15 @@ export type ActiveTorrent = {
   name: string;
   progress: number;
   downloadRate: number;
+  /** Currently-connected peers (handshake done, exchanging data). */
   peers: number;
+  /**
+   * Everyone the client knows about — active + half-open + pending.
+   * Closer to "swarm size from our perspective" than `peers`. Backend
+   * fills 0 if running on an older binary that didn't expose it; the UI
+   * falls back to `peers` in that case.
+   */
+  totalPeers?: number;
   totalSize: number;
   mode?: TorrentMode;
 };
@@ -105,17 +119,36 @@ export async function fetchFeatured(signal?: AbortSignal): Promise<Group[]> {
   return Array.isArray(data) ? (data as Group[]) : [];
 }
 
+/**
+ * startTorrent kicks off a new torrent session by either magnet URI or
+ * .torrent file URL. Pass the GroupTorrent directly — the function picks
+ * the right field based on what's populated. Sources that publish magnets
+ * use the magnet; sources that only have .torrent links (porevotorrent)
+ * use the file URL, which the backend resolves to a magnet by fetching
+ * and decoding the .torrent.
+ */
 export async function startTorrent(
-  magnet: string,
+  source: { magnet: string; torrentFileUrl?: string },
   mode: TorrentMode = 'stream',
 ): Promise<TorrentSession> {
+  const magnet = source.magnet?.trim() ?? '';
+  const torrentFileUrl = source.torrentFileUrl?.trim() ?? '';
+  if (!magnet && !torrentFileUrl) {
+    throw new ApiError('No magnet or torrent file URL on this release', 400);
+  }
   const res = await fetch('/api/torrents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ magnet, mode }),
+    body: JSON.stringify({ magnet, torrentFileUrl, mode }),
   });
   if (res.status === 504) {
-    throw new ApiError('Metadata fetch timed out — try a torrent with more seeders', 504);
+    // Backend keeps the torrent warming up after the initial wait, so a
+    // second click usually succeeds within seconds. Tell the user to
+    // retry rather than blaming the seeder count.
+    throw new ApiError(
+      'Метаданные ещё подгружаются — нажми «Смотреть» ещё раз через 10–20 секунд',
+      504,
+    );
   }
   if (res.status === 400) {
     const msg = await readErrorMessage(res, 'Invalid magnet link');
@@ -482,6 +515,26 @@ export type Settings = {
   activeTorrents: number;
   canPickFolder: boolean;
   adult: boolean;
+  /**
+   * lanAccess: when true, the backend binds to 0.0.0.0 instead of
+   * localhost so TVs / phones / other LAN devices can reach the SPA.
+   * Toggle requires an app restart to apply (the http.Server is bound
+   * once at startup).
+   */
+  lanAccess: boolean;
+  /**
+   * tvMode: tweaks the SPA layout for D-pad navigation on smart TVs —
+   * larger focus rings, conservative <video preload>, autofocus on
+   * first card. Pure-frontend; takes effect immediately, no restart.
+   */
+  tvMode: boolean;
+  /**
+   * lanUrls: every reachable http://<ip>:<port>/ URL the user can type
+   * on their TV browser. Empty when lanAccess is false. Computed
+   * server-side from network interfaces so the user doesn't have to
+   * dig in `ipconfig` themselves.
+   */
+  lanUrls: string[];
 };
 
 export async function getSettings(signal?: AbortSignal): Promise<Settings> {
@@ -499,6 +552,9 @@ export async function getSettings(signal?: AbortSignal): Promise<Settings> {
     activeTorrents: typeof data.activeTorrents === 'number' ? data.activeTorrents : 0,
     canPickFolder: Boolean(data.canPickFolder),
     adult: Boolean(data.adult),
+    lanAccess: Boolean(data.lanAccess),
+    tvMode: Boolean(data.tvMode),
+    lanUrls: Array.isArray(data.lanUrls) ? (data.lanUrls as string[]).filter((u) => typeof u === 'string') : [],
   };
 }
 
@@ -506,11 +562,13 @@ export async function getSettings(signal?: AbortSignal): Promise<Settings> {
 // change — undefined keys are left untouched on the server. Throws
 // ApiError(409) when active torrents prevent a downloadsDir swap.
 export async function updateSettings(
-  patch: { downloadsDir?: string; adult?: boolean },
-): Promise<{ downloadsDir: string; adult: boolean; warning?: string }> {
+  patch: { downloadsDir?: string; adult?: boolean; lanAccess?: boolean; tvMode?: boolean },
+): Promise<{ downloadsDir: string; adult: boolean; lanAccess: boolean; tvMode: boolean; warning?: string }> {
   const body: Record<string, unknown> = {};
   if (patch.downloadsDir !== undefined) body.downloadsDir = patch.downloadsDir;
   if (patch.adult !== undefined) body.adult = patch.adult;
+  if (patch.lanAccess !== undefined) body.lanAccess = patch.lanAccess;
+  if (patch.tvMode !== undefined) body.tvMode = patch.tvMode;
   const res = await fetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -523,11 +581,15 @@ export async function updateSettings(
   const data = (await res.json()) as {
     downloadsDir?: string;
     adult?: boolean;
+    lanAccess?: boolean;
+    tvMode?: boolean;
     warning?: string;
   };
   return {
     downloadsDir: typeof data.downloadsDir === 'string' ? data.downloadsDir : (patch.downloadsDir ?? ''),
     adult: typeof data.adult === 'boolean' ? data.adult : Boolean(patch.adult),
+    lanAccess: typeof data.lanAccess === 'boolean' ? data.lanAccess : Boolean(patch.lanAccess),
+    tvMode: typeof data.tvMode === 'boolean' ? data.tvMode : Boolean(patch.tvMode),
     warning: typeof data.warning === 'string' ? data.warning : undefined,
   };
 }

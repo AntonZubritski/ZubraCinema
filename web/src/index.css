@@ -75,6 +75,25 @@
   }
 }
 
+/* TV mode — applied via `body.tv-mode` when Settings → "Режим пульта"
+   is on. Beefier focus rings (TVs are far away — thin desktop rings
+   disappear) and bumped base font size so 1080p TVs at 3m read it.
+   Buttons get a soft scale-in on focus so D-pad nav has obvious
+   visual feedback. */
+body.tv-mode {
+  font-size: 18px;
+}
+body.tv-mode .focus-ring:focus-visible {
+  outline: 3px solid #5a953b;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 6px rgba(90, 149, 59, 0.18);
+}
+body.tv-mode button:focus-visible,
+body.tv-mode a:focus-visible {
+  transform: scale(1.04);
+  transition: transform 120ms ease;
+}
+
 /* Hide the native HTML5 video timeline + time display. The transcoded
    stream is forward-only, so what the browser thinks is the duration is
    only the bytes streamed so far — clicking the native bar lands at a

@@ -25,6 +25,8 @@ export function SettingsModal({ onClose }: Props) {
   // tracked separately from `settings` (the saved server state) and only
   // committed when the user clicks "Сохранить". Cancel discards them.
   const [pendingAdult, setPendingAdult] = useState(false);
+  const [pendingLAN, setPendingLAN] = useState(false);
+  const [pendingTV, setPendingTV] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string>('');
   const [info, setInfo] = useState<string>('');
@@ -40,6 +42,8 @@ export function SettingsModal({ onClose }: Props) {
         setSettings(s);
         setPath(s.downloadsDir);
         setPendingAdult(s.adult);
+        setPendingLAN(s.lanAccess);
+        setPendingTV(s.tvMode);
         setStatus('idle');
       } catch (err) {
         if (cancelled) return;
@@ -87,7 +91,14 @@ export function SettingsModal({ onClose }: Props) {
     }
     const dirPatch = trimmed !== settings.downloadsDir ? trimmed : undefined;
     const adultPatch = pendingAdult !== settings.adult ? pendingAdult : undefined;
-    if (dirPatch === undefined && adultPatch === undefined) {
+    const lanPatch = pendingLAN !== settings.lanAccess ? pendingLAN : undefined;
+    const tvPatch = pendingTV !== settings.tvMode ? pendingTV : undefined;
+    if (
+      dirPatch === undefined &&
+      adultPatch === undefined &&
+      lanPatch === undefined &&
+      tvPatch === undefined
+    ) {
       onClose();
       return;
     }
@@ -98,10 +109,31 @@ export function SettingsModal({ onClose }: Props) {
       const res = await updateSettings({
         downloadsDir: dirPatch,
         adult: adultPatch,
+        lanAccess: lanPatch,
+        tvMode: tvPatch,
       });
+      const lanRequiresRestart = lanPatch !== undefined;
       if (res.warning) {
         setInfo(res.warning);
-        setSettings({ ...settings, downloadsDir: res.downloadsDir, adult: res.adult });
+        setSettings({
+          ...settings,
+          downloadsDir: res.downloadsDir,
+          adult: res.adult,
+          lanAccess: res.lanAccess,
+          tvMode: res.tvMode,
+        });
+        setStatus('idle');
+        return;
+      }
+      if (lanRequiresRestart) {
+        setInfo('LAN-доступ переключён. Перезапусти приложение чтобы биндинг применился.');
+        setSettings({
+          ...settings,
+          downloadsDir: res.downloadsDir,
+          adult: res.adult,
+          lanAccess: res.lanAccess,
+          tvMode: res.tvMode,
+        });
         setStatus('idle');
         return;
       }
@@ -121,7 +153,10 @@ export function SettingsModal({ onClose }: Props) {
   };
 
   const dirty = settings
-    ? path.trim() !== settings.downloadsDir || pendingAdult !== settings.adult
+    ? path.trim() !== settings.downloadsDir ||
+      pendingAdult !== settings.adult ||
+      pendingLAN !== settings.lanAccess ||
+      pendingTV !== settings.tvMode
     : false;
   const blocked = settings ? settings.activeTorrents > 0 : false;
 
@@ -262,6 +297,85 @@ export function SettingsModal({ onClose }: Props) {
                       Показывать категории «Эротика» и адалт-источники на
                       главной. По умолчанию выключено. Изменение применится
                       после нажатия «Сохранить».
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="mt-5 pt-5 border-t border-ink-700/60">
+                <p className="text-[10px] uppercase tracking-[0.25em] text-ember-300/80 mb-3">
+                  Просмотр на телевизоре
+                </p>
+
+                <label className="flex items-start gap-3 cursor-pointer select-none group">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 w-4 h-4 cursor-pointer accent-ember-400"
+                    checked={pendingLAN}
+                    disabled={status === 'saving'}
+                    onChange={(e) => setPendingLAN(e.target.checked)}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[11px] uppercase tracking-[0.2em] text-bone-300/70 group-hover:text-bone-100 transition-colors">
+                      Доступ из локалки
+                    </span>
+                    <span className="block mt-1 text-xs text-bone-300/50 leading-relaxed">
+                      Открывает порт 7777 для всей домашней сети. Зайди на
+                      телике (Tizen / WebOS / Android TV) в браузер и вбей
+                      адрес ниже. Требует перезапуск приложения.
+                    </span>
+                  </span>
+                </label>
+
+                {settings.lanAccess && settings.lanUrls.length > 0 && (
+                  <div className="mt-3 ml-7 space-y-1.5">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-bone-300/60">
+                      Адреса для ТВ-браузера
+                    </p>
+                    {settings.lanUrls.map((u) => (
+                      <div
+                        key={u}
+                        className="flex items-center gap-2 bg-black/40 border border-ink-700/60 px-3 py-1.5 font-mono text-[12px] text-bone-100"
+                        style={{ borderRadius: 1 }}
+                      >
+                        <code className="flex-1 truncate">{u}</code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(u).catch(() => {});
+                            setInfo(`Скопировано: ${u}`);
+                          }}
+                          className="
+                            focus-ring
+                            text-[10px] uppercase tracking-[0.2em]
+                            text-ember-200 hover:text-bone-50
+                            transition-colors
+                          "
+                        >
+                          Копировать
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <label className="mt-4 flex items-start gap-3 cursor-pointer select-none group">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 w-4 h-4 cursor-pointer accent-ember-400"
+                    checked={pendingTV}
+                    disabled={status === 'saving'}
+                    onChange={(e) => setPendingTV(e.target.checked)}
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[11px] uppercase tracking-[0.2em] text-bone-300/70 group-hover:text-bone-100 transition-colors">
+                      Режим пульта (TV)
+                    </span>
+                    <span className="block mt-1 text-xs text-bone-300/50 leading-relaxed">
+                      Крупные шрифты, толстые focus-кольца, авто-фокус на
+                      первой карточке для D-pad-навигации, экономный
+                      preload видео для слабой памяти телевизора. Применяется
+                      сразу, без перезапуска.
                     </span>
                   </span>
                 </label>
